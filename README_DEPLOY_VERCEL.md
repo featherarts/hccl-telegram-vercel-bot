@@ -125,3 +125,26 @@ In groups, try:
 - Do not commit `.env` to GitHub.
 - If you previously ran the polling bot locally, stop it before using webhooks.
 - To return to local polling later, run `python delete_webhook.py`.
+
+
+## Vercel CLI 54+ entrypoint fix
+
+This package includes `pyproject.toml` with:
+
+```toml
+[tool.vercel]
+entrypoint = "api.telegram:handler"
+```
+
+Do not delete this file. It tells Vercel to load the `handler` class from `api/telegram.py`.
+
+## v1.2 deployment fix
+
+This package includes a valid `pyproject.toml` with both a `[project]` table and the Vercel entrypoint:
+
+```toml
+[tool.vercel]
+entrypoint = "api.telegram:handler"
+```
+
+Vercel now runs `uv lock` when `pyproject.toml` exists, so the `[project]` table and dependencies are included here.

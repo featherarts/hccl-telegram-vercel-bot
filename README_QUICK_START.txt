@@ -20,3 +20,6 @@ HCCL Telegram Bot — Vercel Quick Start
    /start
    /topbat
    /player Hasitha
+
+
+IMPORTANT: Keep pyproject.toml in the repo root. Vercel needs it to find api.telegram:handler.
