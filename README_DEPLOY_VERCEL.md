@@ -1,0 +1,127 @@
+# HCCL Telegram Bot — Vercel Webhook Version
+
+This version is designed for free serverless hosting on Vercel.
+It does **not** run 24/7 with polling. Instead, Telegram calls `/api/telegram` whenever someone sends a bot command.
+
+## Files
+
+```text
+api/telegram.py      # Vercel webhook endpoint
+hccl_bot_data.py     # Supabase ranking queries
+set_webhook.py       # run once after deployment
+delete_webhook.py    # optional, removes webhook if returning to local polling
+requirements.txt     # Python dependencies for Vercel
+vercel.json          # Vercel function config
+.env.example         # local env template
+```
+
+## Step 1 — Push to GitHub
+
+Create a new repo or folder for this bot and upload all files from this package.
+
+Suggested repo name:
+
+```text
+hccl-telegram-vercel-bot
+```
+
+## Step 2 — Import repo into Vercel
+
+1. Go to Vercel
+2. Add New Project
+3. Import your GitHub repo
+4. Keep default settings
+5. Add environment variables before/after deploy
+
+## Step 3 — Add Vercel environment variables
+
+In Vercel project settings, add:
+
+```text
+TELEGRAM_BOT_TOKEN
+SUPABASE_URL
+SUPABASE_KEY
+WEBHOOK_SECRET
+```
+
+Optional:
+
+```text
+ALLOWED_CHAT_IDS
+DEFAULT_TOP_LIMIT
+```
+
+`WEBHOOK_SECRET` is recommended. Use any long random text. The same value must also be used when running `set_webhook.py`.
+
+## Step 4 — Deploy
+
+After deployment, your webhook endpoint will be:
+
+```text
+https://YOUR-VERCEL-PROJECT.vercel.app/api/telegram
+```
+
+Open it in your browser. You should see JSON saying the HCCL Telegram Bot Webhook is ready.
+
+## Step 5 — Set Telegram webhook
+
+On your computer, create a local `.env` file from `.env.example` and fill:
+
+```text
+TELEGRAM_BOT_TOKEN=your_bot_token
+WEBHOOK_SECRET=same_secret_you_added_to_vercel
+```
+
+Then run:
+
+```bash
+pip install python-dotenv
+python set_webhook.py https://YOUR-VERCEL-PROJECT.vercel.app/api/telegram
+```
+
+If it prints `"ok": true`, the webhook is active.
+
+## Step 6 — Test in Telegram
+
+Send your bot:
+
+```text
+/start
+/topbat
+/player Hasitha
+/report
+```
+
+In groups, try:
+
+```text
+/topbat@YourBotUsername
+```
+
+## Commands
+
+```text
+/start
+/help
+/topbat
+/topbat 5
+/topbowl
+/topall
+/player Hasitha
+/team DRAGONS
+/team DRAGONS batting
+/movers
+/fallers
+/gains
+/newentries
+/report
+/benchmarks
+/weeks
+```
+
+## Important notes
+
+- Your Streamlit Dashboard must save at least one snapshot to Supabase before this bot can show data.
+- Do not commit `.env` to GitHub.
+- If you previously ran the polling bot locally, stop it before using webhooks.
+- To return to local polling later, run `python delete_webhook.py`.
