@@ -33,3 +33,8 @@ Profile Card Commands Added in v1.3
 - /card PlayerName    -> compact player card
 
 These commands read both hccl_rankings and hccl_rating_details from the latest saved Supabase snapshot.
+
+
+## v1.5 Profile Card Detail Fix
+
+This version reads player career snapshot values from multiple Supabase detail data shapes and adds `/profiledebug PlayerName` to diagnose missing saved detail data. If profile values still show blank, re-save the latest ranking snapshot from the Streamlit dashboard so `hccl_rating_details` is populated for the latest snapshot.

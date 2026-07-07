@@ -8,6 +8,7 @@ and sends replies through the Telegram Bot API.
 from __future__ import annotations
 
 import json
+import ast
 import os
 import sys
 import traceback
@@ -74,6 +75,7 @@ COMMAND_DESCRIPTIONS = {
     "player": "Full player profile card, e.g. /player Hasitha",
     "profile": "Full player profile card, e.g. /profile Hasitha",
     "card": "Compact player profile card, e.g. /card Hasitha",
+    "profiledebug": "Debug profile data, e.g. /profiledebug Hasitha",
     "team": "Team rankings, e.g. /team DRAGONS",
     "movers": "Top rank climbers",
     "fallers": "Top rank fallers",
@@ -269,34 +271,96 @@ def _best_skill(rows_by_category: Dict[str, Dict[str, Any]]) -> str:
     return best_label
 
 
-def _safe_detail_data(detail_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Return JSON detail data from Supabase safely.
+def _detail_key_variants(key: Any) -> List[str]:
+    """Return forgiving key variants for JSON detail dictionaries."""
+    raw = str(key or "").strip()
+    compact = re.sub(r"[^a-z0-9]+", "_", raw.lower()).strip("_")
+    nospace = re.sub(r"[^a-z0-9]+", "", raw.lower())
+    variants = [raw, raw.lower(), compact, nospace]
+    # Common hand-written aliases used across older dashboard versions.
+    alias_map = {
+        "allrounderqualified": "all_rounder_qualified",
+        "allrounderrating": "all_rounder_rating",
+        "battingrecentform": "batting_recent_form",
+        "bowlingrecentform": "bowling_recent_form",
+        "battingcareerscore": "batting_career_score",
+        "bowlingcareerscore": "bowling_career_score",
+        "achievementscorebatting": "achievement_score_batting",
+        "achievementscorebowling": "achievement_score_bowling",
+        "experiencescore": "experience_score",
+        "playerid": "player_id",
+    }
+    if nospace in alias_map:
+        variants.append(alias_map[nospace])
+    return [v for v in dict.fromkeys(variants) if v]
 
-    Supabase normally returns jsonb as a dict. Some deployments/snapshots can
-    return it as a JSON string, which made the Telegram profile card show blank
-    career values even though `player_id` and team existed. This accepts both.
+
+def _flatten_detail_dict(value: Any) -> Dict[str, Any]:
+    """Parse and flatten Supabase jsonb detail data from multiple possible shapes.
+
+    Some snapshots returned `data` as jsonb dicts, some as JSON strings, and
+    a few older saves can come back looking like a Python dict string. This
+    function accepts all of those and returns a normalized dict with forgiving
+    key aliases, so profile cards can always find innings/runs/wickets/etc.
+    """
+    if value is None or value == "":
+        return {}
+
+    parsed = value
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            try:
+                parsed = ast.literal_eval(text)
+            except Exception:
+                parsed = {}
+
+    if not isinstance(parsed, dict):
+        return {}
+
+    # Some data can be nested as {"data": {...}} or {"details": {...}}.
+    merged: Dict[str, Any] = {}
+    for k, v in parsed.items():
+        if isinstance(v, dict) and str(k).strip().lower() in {"data", "details", "rating_details"}:
+            merged.update(v)
+        else:
+            merged[k] = v
+
+    normalized: Dict[str, Any] = {}
+    for k, v in merged.items():
+        for variant in _detail_key_variants(k):
+            normalized.setdefault(variant, v)
+    return normalized
+
+
+def _safe_detail_data(detail_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return all available player detail data safely.
+
+    This merges the top-level Supabase row (player_id/player/team) with the
+    saved JSON `data` payload and normalizes key names. It fixes profile cards
+    that showed ranks but blank career values because only one JSON shape was
+    supported.
     """
     if not detail_row:
         return {}
-    data = detail_row.get("data") or {}
-    if isinstance(data, dict):
-        return data
-    if isinstance(data, str):
-        try:
-            parsed = json.loads(data)
-            if isinstance(parsed, dict):
-                return parsed
-        except Exception:
-            return {}
-    return {}
+
+    details: Dict[str, Any] = {}
+    # Include top-level values too.
+    details.update(_flatten_detail_dict({k: v for k, v in detail_row.items() if k != "data"}))
+    # Then include the real saved rating details.
+    details.update(_flatten_detail_dict(detail_row.get("data")))
+    return details
 
 
 def detail_value(details: Dict[str, Any], *keys: str) -> Any:
     """Get the first non-empty detail value, supporting old/new key names."""
     for key in keys:
-        value = details.get(key)
-        if value is not None and value != "":
-            return value
+        for variant in _detail_key_variants(key):
+            value = details.get(variant)
+            if value is not None and value != "":
+                return value
     return None
 
 
@@ -334,11 +398,16 @@ def format_profile_card(query: str, compact: bool = False) -> str:
 
     lines.append("")
     lines.append("📌 Career snapshot")
+    innings_val = detail_value(details, 'innings', 'Innings', 'INNINGS')
+    runs_val = detail_value(details, 'runs', 'RUNS', 'Runs')
+    wickets_val = detail_value(details, 'wickets', 'WICKETS', 'Wickets')
     lines.append(
-        f"Innings: {format_rating(detail_value(details, 'innings', 'Innings', 'INNINGS'))} | "
-        f"Runs: {format_rating(detail_value(details, 'runs', 'RUNS', 'Runs'))} | "
-        f"Wickets: {format_rating(detail_value(details, 'wickets', 'WICKETS', 'Wickets'))}"
+        f"Innings: {format_rating(innings_val)} | "
+        f"Runs: {format_rating(runs_val)} | "
+        f"Wickets: {format_rating(wickets_val)}"
     )
+    if innings_val is None and runs_val is None and wickets_val is None:
+        lines.append("⚠️ Career stats data is missing in the latest saved snapshot. Re-save rankings from the Streamlit dashboard after updating to the latest dashboard version.")
     lines.append(
         f"Bat recent form: {format_rating(detail_value(details, 'batting_recent_form', 'Batting Recent Form'))} | "
         f"Bowl recent form: {format_rating(detail_value(details, 'bowling_recent_form', 'Bowling Recent Form'))}"
@@ -482,6 +551,34 @@ def command_benchmarks(args: List[str]) -> str:
     return "\n".join(lines)
 
 
+def command_profiledebug(args: List[str]) -> str:
+    if not args:
+        return "Use like this: /profiledebug Hasitha"
+    query = " ".join(args)
+    snapshot, player_name, rows, detail_row, suggestions = store().player_profile(query)
+    if not player_name:
+        return f"Player not found: {query}"
+    details = _safe_detail_data(detail_row)
+    raw_type = type((detail_row or {}).get('data')).__name__ if detail_row else 'None'
+    keys = sorted([str(k) for k in details.keys()])[:40]
+    lines = [
+        "🛠 Profile Debug",
+        f"Player: {player_name}",
+        f"Snapshot: {snapshot.week_label}",
+        f"Detail row found: {'Yes' if detail_row else 'No'}",
+        f"Raw data type: {raw_type}",
+        f"Available detail keys: {', '.join(keys) if keys else 'None'}",
+        "",
+        "Main values:",
+        f"innings={detail_value(details, 'innings')}",
+        f"runs={detail_value(details, 'runs')}",
+        f"wickets={detail_value(details, 'wickets')}",
+        f"bat_recent={detail_value(details, 'batting_recent_form')}",
+        f"bowl_recent={detail_value(details, 'bowling_recent_form')}",
+    ]
+    return "\n".join(lines)
+
+
 def command_weeks(args: List[str]) -> str:
     snapshots = store().list_snapshots(limit=10)
     if not snapshots:
@@ -502,6 +599,7 @@ COMMANDS = {
     "player": command_player,
     "profile": command_profile,
     "card": command_card,
+    "profiledebug": command_profiledebug,
     "team": command_team,
     "movers": command_movers,
     "fallers": command_fallers,

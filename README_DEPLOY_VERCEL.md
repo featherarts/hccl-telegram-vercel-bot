@@ -176,3 +176,8 @@ This version fixes blank career snapshot values in `/player`, `/profile`, and `/
 Some Supabase deployments return the `hccl_rating_details.data` jsonb field as a JSON string instead of a Python dictionary. The bot now accepts both formats and also supports old/new detail key names.
 
 No database schema change is required. Redeploy Vercel after replacing the files.
+
+
+## v1.5 Profile Card Detail Fix
+
+This version reads player career snapshot values from multiple Supabase detail data shapes and adds `/profiledebug PlayerName` to diagnose missing saved detail data. If profile values still show blank, re-save the latest ranking snapshot from the Streamlit dashboard so `hccl_rating_details` is populated for the latest snapshot.
