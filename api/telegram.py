@@ -36,6 +36,7 @@ from hccl_bot_data import (  # noqa: E402
     format_rating,
     format_signed,
     parse_category,
+    VALID_CATEGORIES,
 )
 
 
