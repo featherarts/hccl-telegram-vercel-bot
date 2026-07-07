@@ -168,3 +168,11 @@ No database schema change is required. It uses existing tables:
 hccl_rankings
 hccl_rating_details
 ```
+
+
+## v1.4 Profile Card Data Fix
+
+This version fixes blank career snapshot values in `/player`, `/profile`, and `/card`.
+Some Supabase deployments return the `hccl_rating_details.data` jsonb field as a JSON string instead of a Python dictionary. The bot now accepts both formats and also supports old/new detail key names.
+
+No database schema change is required. Redeploy Vercel after replacing the files.

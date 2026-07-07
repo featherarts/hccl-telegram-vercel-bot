@@ -32,6 +32,8 @@ COMMANDS = [
     {"command": "topbowl", "description": "Top bowling rankings"},
     {"command": "topall", "description": "Top all-rounder rankings"},
     {"command": "player", "description": "Player profile, e.g. /player Hasitha"},
+    {"command": "profile", "description": "Full profile card, e.g. /profile Hasitha"},
+    {"command": "card", "description": "Compact profile card, e.g. /card Hasitha"},
     {"command": "team", "description": "Team rankings, e.g. /team DRAGONS"},
     {"command": "movers", "description": "Top rank climbers"},
     {"command": "fallers", "description": "Top rank fallers"},

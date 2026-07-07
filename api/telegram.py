@@ -246,11 +246,11 @@ def _profile_badges(rows_by_category: Dict[str, Dict[str, Any]], details: Dict[s
         if row and str(row.get("rank")) == "1":
             badges.append(f"{icon} No.1 {category}")
 
-    if as_bool(details.get("batting_qualified")):
+    if as_bool(detail_value(details, "batting_qualified", "Batting Qualified")):
         badges.append("✅ Batting qualified")
-    if as_bool(details.get("bowling_qualified")):
+    if as_bool(detail_value(details, "bowling_qualified", "Bowling Qualified")):
         badges.append("✅ Bowling qualified")
-    if as_bool(details.get("all_rounder_qualified")):
+    if as_bool(detail_value(details, "all_rounder_qualified", "All-Rounder Qualified", "All Rounder Qualified")):
         badges.append("✅ All-rounder qualified")
     return " | ".join(badges) if badges else "Provisional / building profile"
 
@@ -270,12 +270,38 @@ def _best_skill(rows_by_category: Dict[str, Dict[str, Any]]) -> str:
 
 
 def _safe_detail_data(detail_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return JSON detail data from Supabase safely.
+
+    Supabase normally returns jsonb as a dict. Some deployments/snapshots can
+    return it as a JSON string, which made the Telegram profile card show blank
+    career values even though `player_id` and team existed. This accepts both.
+    """
     if not detail_row:
         return {}
     data = detail_row.get("data") or {}
     if isinstance(data, dict):
         return data
+    if isinstance(data, str):
+        try:
+            parsed = json.loads(data)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return {}
     return {}
+
+
+def detail_value(details: Dict[str, Any], *keys: str) -> Any:
+    """Get the first non-empty detail value, supporting old/new key names."""
+    for key in keys:
+        value = details.get(key)
+        if value is not None and value != "":
+            return value
+    return None
+
+
+def format_detail(details: Dict[str, Any], *keys: str) -> str:
+    return format_rating(detail_value(details, *keys))
 
 
 def format_profile_card(query: str, compact: bool = False) -> str:
@@ -289,7 +315,7 @@ def format_profile_card(query: str, compact: bool = False) -> str:
     details = _safe_detail_data(detail_row)
     rows_by_category = _rank_row_by_category(rows)
     team = (detail_row or {}).get("team") or (rows[0].get("team") if rows else "—")
-    player_id = (detail_row or {}).get("player_id") or details.get("player_id") or "—"
+    player_id = (detail_row or {}).get("player_id") or detail_value(details, "player_id", "ID", "Player ID") or "—"
 
     title = "🏏 HCCL PLAYER CARD"
     lines = [title, f"{player_name} | {team}"]
@@ -309,22 +335,22 @@ def format_profile_card(query: str, compact: bool = False) -> str:
     lines.append("")
     lines.append("📌 Career snapshot")
     lines.append(
-        f"Innings: {format_rating(details.get('innings'))} | "
-        f"Runs: {format_rating(details.get('runs'))} | "
-        f"Wickets: {format_rating(details.get('wickets'))}"
+        f"Innings: {format_rating(detail_value(details, 'innings', 'Innings', 'INNINGS'))} | "
+        f"Runs: {format_rating(detail_value(details, 'runs', 'RUNS', 'Runs'))} | "
+        f"Wickets: {format_rating(detail_value(details, 'wickets', 'WICKETS', 'Wickets'))}"
     )
     lines.append(
-        f"Bat recent form: {format_rating(details.get('batting_recent_form'))} | "
-        f"Bowl recent form: {format_rating(details.get('bowling_recent_form'))}"
+        f"Bat recent form: {format_rating(detail_value(details, 'batting_recent_form', 'Batting Recent Form'))} | "
+        f"Bowl recent form: {format_rating(detail_value(details, 'bowling_recent_form', 'Bowling Recent Form'))}"
     )
     lines.append(
-        f"Bat career score: {format_rating(details.get('batting_career_score'))} | "
-        f"Bowl career score: {format_rating(details.get('bowling_career_score'))}"
+        f"Bat career score: {format_rating(detail_value(details, 'batting_career_score', 'Batting Career Score'))} | "
+        f"Bowl career score: {format_rating(detail_value(details, 'bowling_career_score', 'Bowling Career Score'))}"
     )
     lines.append(
-        f"Bat achievement: {format_rating(details.get('achievement_score_batting'))} | "
-        f"Bowl achievement: {format_rating(details.get('achievement_score_bowling'))} | "
-        f"Experience: {format_rating(details.get('experience_score'))}"
+        f"Bat achievement: {format_rating(detail_value(details, 'achievement_score_batting', 'Achievement Score Batting'))} | "
+        f"Bowl achievement: {format_rating(detail_value(details, 'achievement_score_bowling', 'Achievement Score Bowling'))} | "
+        f"Experience: {format_rating(detail_value(details, 'experience_score', 'Experience Score'))}"
     )
 
     lines.append("")
