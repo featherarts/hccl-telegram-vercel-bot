@@ -1,40 +1,29 @@
-HCCL Telegram Bot — Vercel Quick Start
+HCCL Telegram Bot v1.7 — Clean Mobile UI Quick Start
 
-1. Upload this folder to a new GitHub repo.
-2. Import the repo into Vercel.
-3. Add Vercel environment variables:
-   TELEGRAM_BOT_TOKEN
-   SUPABASE_URL
-   SUPABASE_KEY
-   WEBHOOK_SECRET
-4. Deploy.
-5. Copy your Vercel URL:
-   https://YOUR-PROJECT.vercel.app/api/telegram
-6. On your computer, create .env from .env.example and add:
-   TELEGRAM_BOT_TOKEN=your_token
-   WEBHOOK_SECRET=same_as_vercel
-7. Run:
-   pip install python-dotenv
-   python set_webhook.py https://YOUR-PROJECT.vercel.app/api/telegram
-8. Test in Telegram:
-   /start
+1. Upload this folder to your existing Vercel bot GitHub repo.
+2. Replace old files, especially api/telegram.py.
+3. Redeploy on Vercel.
+4. No webhook reset is needed unless your Vercel URL changed.
+5. Test in Telegram:
    /topbat
-   /player Hasitha
-   /profile Hasitha
-   /card Hasitha
+   /topbowl
+   /topall
+   /movers
+   /fallers
+   /player Pasindu
+   /card Pasindu
 
+What changed in v1.7:
+- Cleaner mobile-first message design
+- Bold headings through Telegram HTML formatting
+- Shorter ranking entries
+- Grouped climbers/fallers/gains/new entries
+- Improved player profile card and compact card
 
-IMPORTANT: Keep pyproject.toml in the repo root. Vercel needs it to find api.telegram:handler.
+Required Vercel env variables:
+- TELEGRAM_BOT_TOKEN
+- SUPABASE_URL
+- SUPABASE_KEY
+- WEBHOOK_SECRET
 
-
-Profile Card Commands Added in v1.3
-- /player PlayerName  -> full official profile card
-- /profile PlayerName -> same as /player
-- /card PlayerName    -> compact player card
-
-These commands read both hccl_rankings and hccl_rating_details from the latest saved Supabase snapshot.
-
-
-## v1.5 Profile Card Detail Fix
-
-This version reads player career snapshot values from multiple Supabase detail data shapes and adds `/profiledebug PlayerName` to diagnose missing saved detail data. If profile values still show blank, re-save the latest ranking snapshot from the Streamlit dashboard so `hccl_rating_details` is populated for the latest snapshot.
+Important: Keep pyproject.toml in the repo root. Vercel needs it to find api.telegram:handler.

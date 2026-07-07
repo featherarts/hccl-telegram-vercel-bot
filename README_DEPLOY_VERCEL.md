@@ -1,4 +1,4 @@
-# HCCL Telegram Bot — Vercel Webhook Version
+# HCCL Telegram Bot v1.7 — Vercel Webhook + Clean Mobile UI
 
 This version is designed for free serverless hosting on Vercel.
 It does **not** run 24/7 with polling. Instead, Telegram calls `/api/telegram` whenever someone sends a bot command.
@@ -181,3 +181,21 @@ No database schema change is required. Redeploy Vercel after replacing the files
 ## v1.5 Profile Card Detail Fix
 
 This version reads player career snapshot values from multiple Supabase detail data shapes and adds `/profiledebug PlayerName` to diagnose missing saved detail data. If profile values still show blank, re-save the latest ranking snapshot from the Streamlit dashboard so `hccl_rating_details` is populated for the latest snapshot.
+
+
+## v1.6 Player Profile Crash Fix
+
+Fixes `/player`, `/profile`, `/card`, and `/profiledebug` crashing because the profile detail key normalizer used `re` without importing it. No Supabase schema change is needed.
+
+
+## v1.7 Clean Mobile UI
+
+This version redesigns Telegram replies for phone screens:
+
+- HTML bold headings and cleaner spacing
+- Compact 2-line ranking entries for `/topbat`, `/topbowl`, `/topall`
+- Grouped `/movers`, `/fallers`, `/gains`, and `/newentries` by Batting, Bowling, and All-Rounder
+- Improved `/player` and `/profile` cards with cleaner sections
+- Short `/card` view for fast group-chat sharing
+
+After replacing the files, redeploy Vercel. No webhook reset is required unless your deployment URL changed.

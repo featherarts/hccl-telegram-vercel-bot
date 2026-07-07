@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import ast
+import html
 import os
 import re
 import sys
@@ -44,26 +45,30 @@ MAX_MESSAGE_LENGTH = 3900
 
 
 HELP_TEXT = """
-🏏 Welcome to the HCCL Rankings Bot
+🏏 <b>HCCL Rankings Bot</b>
 
-Use these commands:
-/topbat - top batting rankings
-/topbowl - top bowling rankings
-/topall - top all-rounder rankings
-/player Hasitha - full player profile card
-/profile Hasitha - same as /player
-/card Hasitha - compact profile card
-/team DRAGONS - team-wise rankings
-/movers - biggest rank climbers
-/fallers - biggest rank fallers
-/gains - biggest rating gains
-/newentries - new ranking entries
-/report - weekly ranking report
-/benchmarks - current rating benchmarks
-/weeks - saved ranking weeks
-/help - command list
+<b>Main commands</b>
+🏏 /topbat — batting rankings
+🎯 /topbowl — bowling rankings
+👑 /topall — all-rounder rankings
 
-Tip: You can add a number, for example /topbat 5
+<b>Player & team</b>
+👤 /player Hasitha — full profile card
+⚡ /card Hasitha — short mobile card
+🏟 /team DRAGONS — team rankings
+
+<b>Weekly movement</b>
+📈 /movers — biggest climbers
+📉 /fallers — biggest fallers
+🔥 /gains — biggest rating gains
+🆕 /newentries — new entries
+
+<b>More</b>
+🗞 /report — weekly report
+📊 /benchmarks — rating benchmarks
+🗓 /weeks — saved ranking weeks
+
+Tip: add a number, for example /topbat 5
 """.strip()
 
 
@@ -165,6 +170,7 @@ def send_message(chat_id: int, text: str, message_thread_id: Optional[int] = Non
         payload: Dict[str, Any] = {
             "chat_id": chat_id,
             "text": chunk,
+            "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
         if message_thread_id is not None:
@@ -192,19 +198,87 @@ def store() -> HCCLSupabaseStore:
     return HCCLSupabaseStore()
 
 
-def snapshot_header(snapshot: Any, title: str) -> str:
+def h(value: Any) -> str:
+    """HTML-escape dynamic text for Telegram."""
+    if value is None or value == "":
+        return "—"
+    return html.escape(str(value), quote=False)
+
+
+def bold(value: Any) -> str:
+    return f"<b>{h(value)}</b>"
+
+
+def italic(value: Any) -> str:
+    return f"<i>{h(value)}</i>"
+
+
+CATEGORY_ICONS = {
+    "Batting": "🏏",
+    "Bowling": "🎯",
+    "All-Rounder": "👑",
+}
+
+CATEGORY_SHORT = {
+    "Batting": "Bat",
+    "Bowling": "Bowl",
+    "All-Rounder": "AR",
+}
+
+
+def display_movement(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text in {"—", "-"}:
+        return "→"
+    return text
+
+
+def display_change(value: Any) -> str:
+    if value is None or value == "":
+        return "—"
+    try:
+        number = float(value)
+        if number == 0:
+            return "±0"
+        if number.is_integer():
+            return f"{int(number):+d}"
+        return f"{number:+.1f}"
+    except Exception:
+        text = str(value).strip()
+        return text if text else "—"
+
+
+def medal(index: int) -> str:
+    return {1: "🥇", 2: "🥈", 3: "🥉"}.get(index, f"{index})")
+
+
+def snapshot_header(snapshot: Any, title: str, subtitle: str = "") -> str:
     official = "Official only" if snapshot.official_only else "All calculated players"
-    return f"{title}\n{snapshot.week_label} | {snapshot.snapshot_date} | {official}\n"
+    lines = [bold(title), f"🗓 {h(snapshot.week_label)} | {h(snapshot.snapshot_date)}"]
+    if subtitle:
+        lines.append(h(subtitle))
+    lines.append(f"📌 {h(official)}")
+    return "\n".join(lines)
 
 
 def format_top(category: str, limit: int) -> str:
     snapshot, rows = store().top(category, limit=limit)
     if not rows:
-        return f"No {category} rankings found."
-    icon = "🏏" if category == "Batting" else "🎯" if category == "Bowling" else "👑"
-    lines = [snapshot_header(snapshot, f"{icon} HCCL {category} Top {limit}")]
-    for row in rows:
-        lines.append(f"{icon} {format_player_line(row)}")
+        return f"No {h(category)} rankings found."
+
+    icon = CATEGORY_ICONS.get(category, "🏏")
+    lines = [snapshot_header(snapshot, f"{icon} HCCL {category} Top {limit}"), ""]
+    for idx, row in enumerate(rows, start=1):
+        rank = format_rank(row.get("rank"))
+        player = row.get("player") or "Unknown"
+        team = row.get("team") or "—"
+        rating = format_rating(row.get("rating"))
+        movement = display_movement(row.get("movement"))
+        change = display_change(row.get("rating_change"))
+        lines.append(f"{medal(idx)} {bold(player)} {italic(f'({team})')}")
+        lines.append(f"   {h(rank)} • {h(rating)} pts • {h(movement)} • {h(change)}")
+        if idx != len(rows):
+            lines.append("")
     return "\n".join(lines)
 
 
@@ -228,34 +302,38 @@ def _rank_row_by_category(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any
     return {str(row.get("category") or ""): row for row in rows}
 
 
-def _row_line(icon: str, label: str, row: Optional[Dict[str, Any]], rating_key: str, details: Dict[str, Any]) -> str:
+def _row_line(icon: str, label: str, row: Optional[Dict[str, Any]], rating_key: str, details: Dict[str, Any]) -> List[str]:
     if row:
         rank = format_rank(row.get("rank"))
         rating = format_rating(row.get("rating"))
-        movement = row.get("movement") or "—"
-        change = row.get("rating_change") or "—"
+        movement = display_movement(row.get("movement"))
+        change = display_change(row.get("rating_change"))
         status = row.get("status") or "—"
-        return f"{icon} {label}: {rank} | {rating} pts | {movement} | {change} | {status}"
+        return [
+            f"{icon} {bold(label)}",
+            f"   {h(rank)} • {h(rating)} pts • {h(movement)} • {h(change)}",
+            f"   {h(status)}",
+        ]
     rating = details.get(rating_key)
     if rating is not None and rating != "":
-        return f"{icon} {label}: — | {format_rating(rating)} pts | — | — | Provisional"
-    return f"{icon} {label}: No rating yet"
+        return [f"{icon} {bold(label)}", f"   — • {format_rating(rating)} pts • → • —", "   Provisional"]
+    return [f"{icon} {bold(label)}", "   No rating yet"]
 
 
 def _profile_badges(rows_by_category: Dict[str, Dict[str, Any]], details: Dict[str, Any]) -> str:
-    badges: List[str] = []
-    for category, icon in [("Batting", "🏏"), ("Bowling", "🎯"), ("All-Rounder", "👑")]:
-        row = rows_by_category.get(category)
-        if row and str(row.get("rank")) == "1":
-            badges.append(f"{icon} No.1 {category}")
-
+    qualified = []
     if as_bool(detail_value(details, "batting_qualified", "Batting Qualified")):
-        badges.append("✅ Batting qualified")
+        qualified.append("🏏 Bat")
     if as_bool(detail_value(details, "bowling_qualified", "Bowling Qualified")):
-        badges.append("✅ Bowling qualified")
+        qualified.append("🎯 Bowl")
     if as_bool(detail_value(details, "all_rounder_qualified", "All-Rounder Qualified", "All Rounder Qualified")):
-        badges.append("✅ All-rounder qualified")
-    return " | ".join(badges) if badges else "Provisional / building profile"
+        qualified.append("👑 AR")
+
+    if len(qualified) == 3:
+        return "🟢 Official all-rounder profile"
+    if qualified:
+        return "🟢 Qualified: " + " | ".join(qualified)
+    return "🟡 Provisional / building profile"
 
 
 def _best_skill(rows_by_category: Dict[str, Dict[str, Any]]) -> str:
@@ -369,76 +447,107 @@ def format_detail(details: Dict[str, Any], *keys: str) -> str:
     return format_rating(detail_value(details, *keys))
 
 
+def _player_team_id(player_name: str, team: str, player_id: Any) -> List[str]:
+    return [
+        bold(player_name),
+        f"🏟 <b>Team:</b> {h(team)}",
+        f"🆔 <b>ID:</b> {h(player_id)}",
+    ]
+
+
+def _movement_summary(rows_by_category: Dict[str, Dict[str, Any]]) -> str:
+    bits: List[str] = []
+    for category in ["Batting", "Bowling", "All-Rounder"]:
+        row = rows_by_category.get(category)
+        if row:
+            short = CATEGORY_SHORT.get(category, category)
+            bits.append(f"{short} {display_movement(row.get('movement'))} ({display_change(row.get('rating_change'))})")
+    return " | ".join(bits) if bits else "—"
+
+
 def format_profile_card(query: str, compact: bool = False) -> str:
     snapshot, player_name, rows, detail_row, suggestions = store().player_profile(query)
     if not player_name:
         suggestion_text = ""
         if suggestions:
-            suggestion_text = "\n\nPossible matches:\n" + "\n".join(f"- {name}" for name in suggestions)
-        return f"Player not found: {query}{suggestion_text}"
+            suggestion_text = "\n\n<b>Possible matches</b>\n" + "\n".join(f"• {h(name)}" for name in suggestions)
+        return f"Player not found: {h(query)}{suggestion_text}"
 
     details = _safe_detail_data(detail_row)
     rows_by_category = _rank_row_by_category(rows)
     team = (detail_row or {}).get("team") or (rows[0].get("team") if rows else "—")
     player_id = (detail_row or {}).get("player_id") or detail_value(details, "player_id", "ID", "Player ID") or "—"
 
-    title = "🏏 HCCL PLAYER CARD"
-    lines = [title, f"{player_name} | {team}"]
-    lines.append(f"Week: {snapshot.week_label} | {snapshot.snapshot_date}")
-    lines.append(f"Player ID: {player_id}")
-    lines.append("")
-    lines.append(_profile_badges(rows_by_category, details))
-    lines.append("")
-
-    lines.append(_row_line("🏏", "Batting", rows_by_category.get("Batting"), "batting_rating", details))
-    lines.append(_row_line("🎯", "Bowling", rows_by_category.get("Bowling"), "bowling_rating", details))
-    lines.append(_row_line("👑", "All-Rounder", rows_by_category.get("All-Rounder"), "all_rounder_rating", details))
-
     if compact:
+        lines = [f"⚡ {bold(player_name)} {italic(f'({team})')}", f"🗓 {h(snapshot.week_label)}", ""]
+        for category in ["Batting", "Bowling", "All-Rounder"]:
+            row = rows_by_category.get(category)
+            icon = CATEGORY_ICONS.get(category, "•")
+            short = CATEGORY_SHORT.get(category, category)
+            if row:
+                lines.append(
+                    f"{icon} <b>{h(short)}</b> {h(format_rank(row.get('rank')))} | "
+                    f"{h(format_rating(row.get('rating')))} pts | {h(display_movement(row.get('movement')))}"
+                )
+        runs = format_rating(detail_value(details, "runs", "RUNS", "Runs"))
+        wickets = format_rating(detail_value(details, "wickets", "WICKETS", "Wickets"))
+        bat_form = format_rating(detail_value(details, "batting_recent_form", "Batting Recent Form"))
+        bowl_form = format_rating(detail_value(details, "bowling_recent_form", "Bowling Recent Form"))
+        lines.extend(["", f"📌 Runs: {h(runs)} | Wkts: {h(wickets)}", f"🔥 Form: Bat {h(bat_form)} | Bowl {h(bowl_form)}"])
         return "\n".join(lines)
 
-    lines.append("")
-    lines.append("📌 Career snapshot")
-    innings_val = detail_value(details, 'innings', 'Innings', 'INNINGS')
-    runs_val = detail_value(details, 'runs', 'RUNS', 'Runs')
-    wickets_val = detail_value(details, 'wickets', 'WICKETS', 'Wickets')
-    lines.append(
-        f"Innings: {format_rating(innings_val)} | "
-        f"Runs: {format_rating(runs_val)} | "
-        f"Wickets: {format_rating(wickets_val)}"
-    )
+    lines = [
+        "🏏 <b>HCCL PLAYER CARD</b>",
+        "",
+        *_player_team_id(player_name, team, player_id),
+        f"🗓 <b>Week:</b> {h(snapshot.week_label)} | {h(snapshot.snapshot_date)}",
+        "",
+        "⚡ <b>Status</b>",
+        _profile_badges(rows_by_category, details),
+        "",
+        "📊 <b>Rankings</b>",
+    ]
+
+    for category, icon, rating_key in [
+        ("Batting", "🏏", "batting_rating"),
+        ("Bowling", "🎯", "bowling_rating"),
+        ("All-Rounder", "👑", "all_rounder_rating"),
+    ]:
+        lines.extend(_row_line(icon, category, rows_by_category.get(category), rating_key, details))
+        lines.append("")
+
+    innings_val = detail_value(details, "innings", "Innings", "INNINGS")
+    runs_val = detail_value(details, "runs", "RUNS", "Runs")
+    wickets_val = detail_value(details, "wickets", "WICKETS", "Wickets")
+    bat_form = detail_value(details, "batting_recent_form", "Batting Recent Form")
+    bowl_form = detail_value(details, "bowling_recent_form", "Bowling Recent Form")
+
+    lines.extend([
+        "📌 <b>Career Snapshot</b>",
+        f"Innings: {h(format_rating(innings_val))}",
+        f"Runs: {h(format_rating(runs_val))}",
+        f"Wickets: {h(format_rating(wickets_val))}",
+    ])
     if innings_val is None and runs_val is None and wickets_val is None:
-        lines.append("⚠️ Career stats data is missing in the latest saved snapshot. Re-save rankings from the Streamlit dashboard after updating to the latest dashboard version.")
-    lines.append(
-        f"Bat recent form: {format_rating(detail_value(details, 'batting_recent_form', 'Batting Recent Form'))} | "
-        f"Bowl recent form: {format_rating(detail_value(details, 'bowling_recent_form', 'Bowling Recent Form'))}"
-    )
-    lines.append(
-        f"Bat career score: {format_rating(detail_value(details, 'batting_career_score', 'Batting Career Score'))} | "
-        f"Bowl career score: {format_rating(detail_value(details, 'bowling_career_score', 'Bowling Career Score'))}"
-    )
-    lines.append(
-        f"Bat achievement: {format_rating(detail_value(details, 'achievement_score_batting', 'Achievement Score Batting'))} | "
-        f"Bowl achievement: {format_rating(detail_value(details, 'achievement_score_bowling', 'Achievement Score Bowling'))} | "
-        f"Experience: {format_rating(detail_value(details, 'experience_score', 'Experience Score'))}"
-    )
+        lines.append("⚠️ Career stats are missing in the latest saved snapshot. Re-save rankings from the latest Streamlit dashboard.")
 
-    lines.append("")
-    lines.append("🔥 Quick read")
-    best_skill = _best_skill(rows_by_category)
-    lines.append(f"Best ranking discipline: {best_skill}")
-
-    # Rating movement summary.
-    movement_bits: List[str] = []
-    for category in ["Batting", "Bowling", "All-Rounder"]:
-        row = rows_by_category.get(category)
-        if row:
-            movement_bits.append(f"{category}: {row.get('movement') or '—'} ({row.get('rating_change') or '—'})")
-    if movement_bits:
-        lines.append("Movement: " + " | ".join(movement_bits))
-
-    lines.append("")
-    lines.append("Commands: /topbat /topbowl /topall /team /report")
+    lines.extend([
+        "",
+        "🔥 <b>Recent Form</b>",
+        f"Batting: {h(format_rating(bat_form))}",
+        f"Bowling: {h(format_rating(bowl_form))}",
+        "",
+        "🧠 <b>Rating Components</b>",
+        f"Bat career: {h(format_rating(detail_value(details, 'batting_career_score', 'Batting Career Score')))}",
+        f"Bowl career: {h(format_rating(detail_value(details, 'bowling_career_score', 'Bowling Career Score')))}",
+        f"Bat achievement: {h(format_rating(detail_value(details, 'achievement_score_batting', 'Achievement Score Batting')))}",
+        f"Bowl achievement: {h(format_rating(detail_value(details, 'achievement_score_bowling', 'Achievement Score Bowling')))}",
+        f"Experience: {h(format_rating(detail_value(details, 'experience_score', 'Experience Score')))}",
+        "",
+        "🏆 <b>Quick Read</b>",
+        f"Best discipline: {h(_best_skill(rows_by_category))}",
+        f"Movement: {h(_movement_summary(rows_by_category))}",
+    ])
     return "\n".join(lines)
 
 
@@ -462,6 +571,7 @@ def command_card(args: List[str]) -> str:
         return "Use like this: /card Hasitha"
     return format_profile_card(query, compact=True)
 
+
 def command_team(args: List[str]) -> str:
     if not args:
         return "Use like this: /team DRAGONS or /team DRAGONS batting"
@@ -472,42 +582,67 @@ def command_team(args: List[str]) -> str:
     if not rows or not team_name:
         suggestion_text = ""
         if suggestions:
-            suggestion_text = "\n\nAvailable teams / possible matches:\n" + "\n".join(f"- {name}" for name in suggestions)
-        return f"Team not found: {team_query}{suggestion_text}"
+            suggestion_text = "\n\n<b>Available teams / possible matches</b>\n" + "\n".join(f"• {h(name)}" for name in suggestions)
+        return f"Team not found: {h(team_query)}{suggestion_text}"
 
-    title = f"🏟️ HCCL Team Rankings: {team_name}"
+    title = f"🏟 HCCL Team Rankings: {team_name}"
     if category:
         title += f" | {category}"
-    lines = [snapshot_header(snapshot, title)]
+    lines = [snapshot_header(snapshot, title), ""]
     last_category = None
+    idx = 0
     for row in rows:
         row_category = row.get("category") or ""
         if row_category != last_category:
-            lines.append(f"\n{row_category}")
+            if last_category is not None:
+                lines.append("")
+            lines.append(f"{CATEGORY_ICONS.get(row_category, '•')} {bold(row_category)}")
             last_category = row_category
+            idx = 0
+        idx += 1
+        lines.append(f"• {bold(row.get('player') or 'Unknown')}")
         lines.append(
-            f"Team #{row.get('team_rank')} | Overall {format_rank(row.get('overall_rank'))}: "
-            f"{row.get('player')} — {format_rating(row.get('rating'))} pts "
-            f"{row.get('movement') or '—'} | {row.get('rating_change') or '—'}"
+            f"  Team #{h(row.get('team_rank'))} | Overall {h(format_rank(row.get('overall_rank')))} | "
+            f"{h(format_rating(row.get('rating')))} pts | {h(display_movement(row.get('movement')))} | {h(display_change(row.get('rating_change')))}"
         )
     return "\n".join(lines)
 
 
-def format_report_section(section: str, title: str) -> str:
-    snapshot, rows = store().weekly_report(section=section, limit=25)
-    if not rows:
-        return f"No {title.lower()} found for the latest saved snapshot."
-    lines = [snapshot_header(snapshot, title)]
+def _section_rows_grouped(rows: List[Dict[str, Any]], per_category: int = 5) -> Dict[str, List[Dict[str, Any]]]:
+    grouped: Dict[str, List[Dict[str, Any]]] = {category: [] for category in VALID_CATEGORIES}
     for row in rows:
-        lines.append(
-            f"{row.get('category')} #{row.get('current_rank')}: {row.get('player')} ({row.get('team')}) — "
-            f"{format_rating(row.get('current_rating'))} pts | {row.get('movement') or '—'} | {row.get('rating_change') or '—'}"
-        )
-    return "\n".join(lines)
+        category = str(row.get("category") or "")
+        if category not in grouped:
+            grouped[category] = []
+        if len(grouped[category]) < per_category:
+            grouped[category].append(row)
+    return {k: v for k, v in grouped.items() if v}
+
+
+def format_report_section(section: str, title: str, per_category: int = 5) -> str:
+    snapshot, rows = store().weekly_report(section=section, limit=50)
+    if not rows:
+        return f"No {h(title.lower())} found for the latest saved snapshot."
+
+    lines = [snapshot_header(snapshot, title), ""]
+    grouped = _section_rows_grouped(rows, per_category=per_category)
+    for category in VALID_CATEGORIES:
+        cat_rows = grouped.get(category, [])
+        if not cat_rows:
+            continue
+        lines.append(f"{CATEGORY_ICONS.get(category, '•')} {bold(category)}")
+        for row in cat_rows:
+            lines.append(f"• {bold(row.get('player') or 'Unknown')} {italic(f'({row.get('team') or '—'})')}")
+            lines.append(
+                f"  {h(format_rank(row.get('current_rank')))} • {h(format_rating(row.get('current_rating')))} pts • "
+                f"{h(display_movement(row.get('movement')))} • {h(display_change(row.get('rating_change')))}"
+            )
+        lines.append("")
+    return "\n".join(lines).strip()
 
 
 def command_movers(args: List[str]) -> str:
-    return format_report_section("Top Climbers", "🚀 HCCL Top Climbers")
+    return format_report_section("Top Climbers", "📈 HCCL Top Climbers")
 
 
 def command_fallers(args: List[str]) -> str:
@@ -523,32 +658,46 @@ def command_newentries(args: List[str]) -> str:
 
 
 def command_report(args: List[str]) -> str:
-    snapshot, rows = store().weekly_report(limit=40)
+    snapshot, rows = store().weekly_report(limit=60)
     if not rows:
         return "No weekly report rows found for the latest saved snapshot."
-    lines = [snapshot_header(snapshot, "🗞️ HCCL Weekly Ranking Report")]
-    last_group = None
-    for row in rows:
-        group = f"{row.get('category')} | {row.get('report_section')}"
-        if group != last_group:
-            lines.append(f"\n{group}")
-            last_group = group
-        lines.append(
-            f"#{row.get('current_rank')}: {row.get('player')} ({row.get('team')}) — "
-            f"{format_rating(row.get('current_rating'))} pts | {row.get('movement') or '—'} | {row.get('rating_change') or '—'}"
-        )
-    return "\n".join(lines)
+
+    # Keep the weekly report mobile-friendly: show top 3 from each report section.
+    sections = ["Top Climbers", "Top Fallers", "Top Rating Gains", "New Entries"]
+    titles = {
+        "Top Climbers": "📈 Climbers",
+        "Top Fallers": "📉 Fallers",
+        "Top Rating Gains": "🔥 Rating Gains",
+        "New Entries": "🆕 New Entries",
+    }
+    lines = [snapshot_header(snapshot, "🗞 HCCL Weekly Ranking Report"), ""]
+    for section in sections:
+        section_rows = [r for r in rows if r.get("report_section") == section][:3]
+        if not section_rows:
+            continue
+        lines.append(bold(titles[section]))
+        for row in section_rows:
+            category = row.get("category") or ""
+            icon = CATEGORY_ICONS.get(category, "•")
+            lines.append(f"{icon} {bold(row.get('player') or 'Unknown')} {italic(f'({row.get('team') or '—'})')}")
+            lines.append(
+                f"  {h(category)} {h(format_rank(row.get('current_rank')))} • "
+                f"{h(format_rating(row.get('current_rating')))} pts • "
+                f"{h(display_movement(row.get('movement')))} • {h(display_change(row.get('rating_change')))}"
+            )
+        lines.append("")
+    return "\n".join(lines).strip()
 
 
 def command_benchmarks(args: List[str]) -> str:
     snapshot, rows = store().benchmarks()
     if not rows:
         return "No benchmarks found for the latest saved snapshot."
-    lines = [snapshot_header(snapshot, "📊 HCCL Rating Benchmarks")]
+    lines = [snapshot_header(snapshot, "📊 HCCL Rating Benchmarks"), ""]
     for row in rows:
         key = row.get("benchmark_key")
         label = BENCHMARK_LABELS.get(key, str(key))
-        lines.append(f"{label}: {format_rating(row.get('benchmark_value'))}")
+        lines.append(f"• {bold(label)}: {h(format_rating(row.get('benchmark_value')))}")
     return "\n".join(lines)
 
 
@@ -558,24 +707,24 @@ def command_profiledebug(args: List[str]) -> str:
     query = " ".join(args)
     snapshot, player_name, rows, detail_row, suggestions = store().player_profile(query)
     if not player_name:
-        return f"Player not found: {query}"
+        return f"Player not found: {h(query)}"
     details = _safe_detail_data(detail_row)
     raw_type = type((detail_row or {}).get('data')).__name__ if detail_row else 'None'
     keys = sorted([str(k) for k in details.keys()])[:40]
     lines = [
-        "🛠 Profile Debug",
-        f"Player: {player_name}",
-        f"Snapshot: {snapshot.week_label}",
+        "🛠 <b>Profile Debug</b>",
+        f"Player: {h(player_name)}",
+        f"Snapshot: {h(snapshot.week_label)}",
         f"Detail row found: {'Yes' if detail_row else 'No'}",
-        f"Raw data type: {raw_type}",
-        f"Available detail keys: {', '.join(keys) if keys else 'None'}",
+        f"Raw data type: {h(raw_type)}",
+        f"Available detail keys: {h(', '.join(keys) if keys else 'None')}",
         "",
-        "Main values:",
-        f"innings={detail_value(details, 'innings')}",
-        f"runs={detail_value(details, 'runs')}",
-        f"wickets={detail_value(details, 'wickets')}",
-        f"bat_recent={detail_value(details, 'batting_recent_form')}",
-        f"bowl_recent={detail_value(details, 'bowling_recent_form')}",
+        "<b>Main values</b>",
+        f"innings={h(detail_value(details, 'innings'))}",
+        f"runs={h(detail_value(details, 'runs'))}",
+        f"wickets={h(detail_value(details, 'wickets'))}",
+        f"bat_recent={h(detail_value(details, 'batting_recent_form'))}",
+        f"bowl_recent={h(detail_value(details, 'bowling_recent_form'))}",
     ]
     return "\n".join(lines)
 
@@ -584,10 +733,11 @@ def command_weeks(args: List[str]) -> str:
     snapshots = store().list_snapshots(limit=10)
     if not snapshots:
         return "No saved ranking weeks found yet."
-    lines = ["🗓️ Saved HCCL ranking weeks\n"]
+    lines = ["🗓 <b>Saved HCCL ranking weeks</b>", ""]
     for i, snapshot in enumerate(snapshots, start=1):
         official = "Official only" if snapshot.official_only else "All players"
-        lines.append(f"{i}. {snapshot.week_label} — {snapshot.snapshot_date} — {official}")
+        lines.append(f"{i}. {bold(snapshot.week_label)}")
+        lines.append(f"   {h(snapshot.snapshot_date)} • {h(official)}")
     return "\n".join(lines)
 
 
