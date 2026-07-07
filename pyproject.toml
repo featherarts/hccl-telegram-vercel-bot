@@ -1,7 +1,7 @@
 [project]
 name = "hccl-telegram-vercel-bot"
-version = "1.7.0"
-description = "HCCL Telegram Bot webhook for Vercel"
+version = "1.9.0"
+description = "HCCL Telegram Bot webhook for Vercel with clean mobile commands"
 requires-python = ">=3.12"
 dependencies = [
     "supabase>=2.0.0",

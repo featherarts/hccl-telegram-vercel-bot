@@ -1,41 +1,39 @@
-# HCCL Telegram Bot v1.7 — Vercel Webhook + Clean Mobile UI
+# HCCL Telegram Bot v1.9 — Interactive Mobile Commands
 
-This version is designed for free serverless hosting on Vercel.
-It does **not** run 24/7 with polling. Instead, Telegram calls `/api/telegram` whenever someone sends a bot command.
+This version keeps the Vercel webhook setup from v1.8 and adds new clean mobile-first commands:
+
+```text
+/rank Hasitha
+/form Hasitha
+/compare Pasindu Yasitha
+/compare Pasindu Dilshan vs Yasitha Nawod
+/battle
+/teamprofile TITANS
+```
+
+It does **not** run 24/7 with polling. Telegram sends every command to your Vercel endpoint at `/api/telegram`.
 
 ## Files
 
 ```text
 api/telegram.py      # Vercel webhook endpoint
 hccl_bot_data.py     # Supabase ranking queries
-set_webhook.py       # run once after deployment
-delete_webhook.py    # optional, removes webhook if returning to local polling
+set_webhook.py       # run once after deployment if URL changed
+delete_webhook.py    # optional, removes webhook
 requirements.txt     # Python dependencies for Vercel
 vercel.json          # Vercel function config
+pyproject.toml       # tells Vercel the Python entrypoint
 .env.example         # local env template
 ```
 
-## Step 1 — Push to GitHub
+## Deploy / update
 
-Create a new repo or folder for this bot and upload all files from this package.
+1. Replace your existing Vercel bot repo files with this package.
+2. Push to GitHub.
+3. Redeploy the project on Vercel.
+4. You do **not** need to run `set_webhook.py` again unless the Vercel URL changed.
 
-Suggested repo name:
-
-```text
-hccl-telegram-vercel-bot
-```
-
-## Step 2 — Import repo into Vercel
-
-1. Go to Vercel
-2. Add New Project
-3. Import your GitHub repo
-4. Keep default settings
-5. Add environment variables before/after deploy
-
-## Step 3 — Add Vercel environment variables
-
-In Vercel project settings, add:
+## Required Vercel environment variables
 
 ```text
 TELEGRAM_BOT_TOKEN
@@ -51,65 +49,23 @@ ALLOWED_CHAT_IDS
 DEFAULT_TOP_LIMIT
 ```
 
-`WEBHOOK_SECRET` is recommended. Use any long random text. The same value must also be used when running `set_webhook.py`.
-
-## Step 4 — Deploy
-
-After deployment, your webhook endpoint will be:
-
-```text
-https://YOUR-VERCEL-PROJECT.vercel.app/api/telegram
-```
-
-Open it in your browser. You should see JSON saying the HCCL Telegram Bot Webhook is ready.
-
-## Step 5 — Set Telegram webhook
-
-On your computer, create a local `.env` file from `.env.example` and fill:
-
-```text
-TELEGRAM_BOT_TOKEN=your_bot_token
-WEBHOOK_SECRET=same_secret_you_added_to_vercel
-```
-
-Then run:
-
-```bash
-pip install python-dotenv
-python set_webhook.py https://YOUR-VERCEL-PROJECT.vercel.app/api/telegram
-```
-
-If it prints `"ok": true`, the webhook is active.
-
-## Step 6 — Test in Telegram
-
-Send your bot:
-
-```text
-/start
-/topbat
-/player Hasitha
-/report
-```
-
-In groups, try:
-
-```text
-/topbat@YourBotUsername
-```
-
-## Commands
+## Test commands
 
 ```text
 /start
 /help
 /topbat
-/topbat 5
 /topbowl
 /topall
 /player Hasitha
+/card Hasitha
+/rank Hasitha
+/form Hasitha
+/compare Pasindu Yasitha
+/compare Pasindu Dilshan vs Yasitha Nawod
+/battle
+/teamprofile TITANS
 /team DRAGONS
-/team DRAGONS batting
 /movers
 /fallers
 /gains
@@ -119,83 +75,18 @@ In groups, try:
 /weeks
 ```
 
-## Important notes
+## Group chat usage
 
-- Your Streamlit Dashboard must save at least one snapshot to Supabase before this bot can show data.
-- Do not commit `.env` to GitHub.
-- If you previously ran the polling bot locally, stop it before using webhooks.
-- To return to local polling later, run `python delete_webhook.py`.
-
-
-## Vercel CLI 54+ entrypoint fix
-
-This package includes `pyproject.toml` with:
-
-```toml
-[tool.vercel]
-entrypoint = "api.telegram:handler"
-```
-
-Do not delete this file. It tells Vercel to load the `handler` class from `api/telegram.py`.
-
-## v1.2 deployment fix
-
-This package includes a valid `pyproject.toml` with both a `[project]` table and the Vercel entrypoint:
-
-```toml
-[tool.vercel]
-entrypoint = "api.telegram:handler"
-```
-
-Vercel now runs `uv lock` when `pyproject.toml` exists, so the `[project]` table and dependencies are included here.
-
-
-## v1.3 Profile Cards
-
-This version adds richer Telegram profile cards:
+In a group, use the bot username when needed:
 
 ```text
-/player Hasitha
-/profile Hasitha
-/card Hasitha
+/compare@YourBotUsername Pasindu Yasitha
+/teamprofile@YourBotUsername TITANS
 ```
 
-The full card shows ranking positions, ratings, movement, qualification badges, runs, wickets, recent form, career scores, achievement scores, and best ranking discipline.
+## Notes
 
-No database schema change is required. It uses existing tables:
-
-```text
-hccl_rankings
-hccl_rating_details
-```
-
-
-## v1.4 Profile Card Data Fix
-
-This version fixes blank career snapshot values in `/player`, `/profile`, and `/card`.
-Some Supabase deployments return the `hccl_rating_details.data` jsonb field as a JSON string instead of a Python dictionary. The bot now accepts both formats and also supports old/new detail key names.
-
-No database schema change is required. Redeploy Vercel after replacing the files.
-
-
-## v1.5 Profile Card Detail Fix
-
-This version reads player career snapshot values from multiple Supabase detail data shapes and adds `/profiledebug PlayerName` to diagnose missing saved detail data. If profile values still show blank, re-save the latest ranking snapshot from the Streamlit dashboard so `hccl_rating_details` is populated for the latest snapshot.
-
-
-## v1.6 Player Profile Crash Fix
-
-Fixes `/player`, `/profile`, `/card`, and `/profiledebug` crashing because the profile detail key normalizer used `re` without importing it. No Supabase schema change is needed.
-
-
-## v1.7 Clean Mobile UI
-
-This version redesigns Telegram replies for phone screens:
-
-- HTML bold headings and cleaner spacing
-- Compact 2-line ranking entries for `/topbat`, `/topbowl`, `/topall`
-- Grouped `/movers`, `/fallers`, `/gains`, and `/newentries` by Batting, Bowling, and All-Rounder
-- Improved `/player` and `/profile` cards with cleaner sections
-- Short `/card` view for fast group-chat sharing
-
-After replacing the files, redeploy Vercel. No webhook reset is required unless your deployment URL changed.
+- `/compare Pasindu Yasitha` is best for short names.
+- For full names, use `vs`: `/compare Pasindu Dilshan vs Yasitha Nawod`.
+- `/battle` randomly selects two saved players from the latest Supabase snapshot.
+- `/teamprofile` uses the latest saved team rankings and rating details from Supabase.

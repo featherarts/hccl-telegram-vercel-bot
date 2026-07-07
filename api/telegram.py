@@ -11,6 +11,7 @@ import json
 import ast
 import html
 import os
+import random
 import re
 import sys
 import traceback
@@ -36,6 +37,7 @@ from hccl_bot_data import (  # noqa: E402
     format_rating,
     format_signed,
     parse_category,
+    normalize_text,
     VALID_CATEGORIES,
 )
 
@@ -57,6 +59,11 @@ HELP_TEXT = """
 👤 /player Hasitha — full profile card
 ⚡ /card Hasitha — short mobile card
 🏟 /team DRAGONS — team rankings
+📊 /rank Hasitha — quick ranks
+🔥 /form Hasitha — recent form
+⚔️ /compare Hasitha Yasitha — compare players
+🎲 /battle — random player battle
+🏟 /teamprofile TITANS — team profile
 
 <b>Weekly movement</b>
 📈 /movers — biggest climbers
@@ -84,6 +91,11 @@ COMMAND_DESCRIPTIONS = {
     "card": "Compact player profile card, e.g. /card Hasitha",
     "profiledebug": "Debug profile data, e.g. /profiledebug Hasitha",
     "team": "Team rankings, e.g. /team DRAGONS",
+    "teamprofile": "Clean team profile, e.g. /teamprofile TITANS",
+    "rank": "Quick player ranks, e.g. /rank Hasitha",
+    "form": "Player recent form, e.g. /form Hasitha",
+    "compare": "Compare two players, e.g. /compare Hasitha Yasitha",
+    "battle": "Random player battle",
     "movers": "Top rank climbers",
     "fallers": "Top rank fallers",
     "gains": "Top rating gains",
@@ -730,6 +742,320 @@ def command_profiledebug(args: List[str]) -> str:
     return "\n".join(lines)
 
 
+
+
+# ---------------------------------------------------------------------------
+# New mobile-first interactive commands: /rank, /form, /compare, /battle,
+# /teamprofile. These intentionally keep lines short for Telegram mobile.
+# ---------------------------------------------------------------------------
+
+def _profile_lookup(query: str):
+    """Return snapshot, player name, rows, details, suggestions safely."""
+    snapshot, player_name, rows, detail_row, suggestions = store().player_profile(query)
+    details = _safe_detail_data(detail_row)
+    rows_by_category = _rank_row_by_category(rows)
+    team = (detail_row or {}).get("team") or (rows[0].get("team") if rows else "—")
+    return snapshot, player_name, rows, rows_by_category, detail_row, details, team, suggestions
+
+
+def _not_found_msg(kind: str, query: str, suggestions: List[str]) -> str:
+    suggestion_text = ""
+    if suggestions:
+        suggestion_text = "\n\n<b>Possible matches</b>\n" + "\n".join(f"• {h(name)}" for name in suggestions[:8])
+    return f"{h(kind)} not found: {h(query)}{suggestion_text}"
+
+
+def _rank_mini_line(category: str, row: Optional[Dict[str, Any]]) -> str:
+    icon = CATEGORY_ICONS.get(category, "•")
+    short = CATEGORY_SHORT.get(category, category)
+    if not row:
+        return f"{icon} <b>{h(short)}</b> — not ranked"
+    return (
+        f"{icon} <b>{h(short)}</b> "
+        f"{h(format_rank(row.get('rank')))} | "
+        f"{h(format_rating(row.get('rating')))} pts | "
+        f"{h(display_movement(row.get('movement')))}"
+    )
+
+
+def command_rank(args: List[str]) -> str:
+    query = " ".join(args).strip()
+    if not query:
+        return "Use like this: /rank Hasitha"
+    snapshot, player_name, rows, rows_by_category, detail_row, details, team, suggestions = _profile_lookup(query)
+    if not player_name:
+        return _not_found_msg("Player", query, suggestions)
+
+    lines = [
+        "📊 <b>HCCL QUICK RANKS</b>",
+        "",
+        f"{bold(player_name)} {italic(f'({team})')}",
+        f"🗓 {h(snapshot.week_label)}",
+        "",
+    ]
+    for category in ["Batting", "Bowling", "All-Rounder"]:
+        lines.append(_rank_mini_line(category, rows_by_category.get(category)))
+    lines.extend([
+        "",
+        f"🏆 Best: {h(_best_skill(rows_by_category))}",
+        f"📈 Move: {h(_movement_summary(rows_by_category))}",
+    ])
+    return "\n".join(lines)
+
+
+def _form_mood(score: Any) -> str:
+    n = as_number(score, default=-999)
+    if n == -999:
+        return "—"
+    if n >= 60:
+        return "🔥 Excellent"
+    if n >= 35:
+        return "🟢 Good"
+    if n >= 15:
+        return "🟡 Steady"
+    if n >= 0:
+        return "🔵 Low"
+    return "🔴 Needs boost"
+
+
+def command_form(args: List[str]) -> str:
+    query = " ".join(args).strip()
+    if not query:
+        return "Use like this: /form Hasitha"
+    snapshot, player_name, rows, rows_by_category, detail_row, details, team, suggestions = _profile_lookup(query)
+    if not player_name:
+        return _not_found_msg("Player", query, suggestions)
+
+    bat_form = detail_value(details, "batting_recent_form", "Batting Recent Form")
+    bowl_form = detail_value(details, "bowling_recent_form", "Bowling Recent Form")
+    bat_rating = detail_value(details, "batting_rating", "Batting Rating")
+    bowl_rating = detail_value(details, "bowling_rating", "Bowling Rating")
+    ar_rating = detail_value(details, "all_rounder_rating", "All-Rounder Rating", "All Rounder Rating")
+
+    lines = [
+        "🔥 <b>HCCL FORM CHECK</b>",
+        "",
+        f"{bold(player_name)} {italic(f'({team})')}",
+        f"🗓 {h(snapshot.week_label)}",
+        "",
+        "🏏 <b>Batting Form</b>",
+        f"{h(format_rating(bat_form))} pts • {h(_form_mood(bat_form))}",
+        "",
+        "🎯 <b>Bowling Form</b>",
+        f"{h(format_rating(bowl_form))} pts • {h(_form_mood(bowl_form))}",
+        "",
+        "📊 <b>Current Ratings</b>",
+        f"🏏 Bat: {h(format_rating(bat_rating))}",
+        f"🎯 Bowl: {h(format_rating(bowl_rating))}",
+        f"👑 AR: {h(format_rating(ar_rating))}",
+    ]
+    return "\n".join(lines)
+
+
+def _parse_two_players(args: List[str]) -> Optional[Tuple[str, str, str]]:
+    raw = " ".join(args).strip()
+    if not raw:
+        return None
+    # Best format for full names: /compare Player One vs Player Two
+    lowered = raw.lower()
+    for sep in [" vs ", " v ", " | "]:
+        if sep in lowered:
+            idx = lowered.index(sep)
+            return raw[:idx].strip(), raw[idx + len(sep):].strip(), raw
+    if "," in raw:
+        parts = [p.strip() for p in raw.split(",", 1)]
+        if len(parts) == 2 and parts[0] and parts[1]:
+            return parts[0], parts[1], raw
+    if len(args) >= 2:
+        # Convenient short-name mode: /compare Pasindu Yasitha
+        return args[0], " ".join(args[1:]).strip(), raw
+    return None
+
+
+def _comparison_metric(label: str, left: Any, right: Any, suffix: str = "") -> str:
+    return f"{h(label)}: <b>{h(format_rating(left))}{h(suffix)}</b> vs <b>{h(format_rating(right))}{h(suffix)}</b>"
+
+
+def _get_rating_row(rows_by_category: Dict[str, Dict[str, Any]], category: str) -> Optional[Dict[str, Any]]:
+    return rows_by_category.get(category)
+
+
+def format_compare_card(left_query: str, right_query: str) -> str:
+    left = _profile_lookup(left_query)
+    right = _profile_lookup(right_query)
+
+    lsnapshot, lname, lrows, lbycat, ldetail_row, ldetails, lteam, lsuggestions = left
+    rsnapshot, rname, rrows, rbycat, rdetail_row, rdetails, rteam, rsuggestions = right
+
+    if not lname:
+        return _not_found_msg("Player", left_query, lsuggestions)
+    if not rname:
+        return _not_found_msg("Player", right_query, rsuggestions)
+
+    lines = [
+        "⚔️ <b>HCCL PLAYER BATTLE</b>",
+        "",
+        f"🅰️ {bold(lname)} {italic(f'({lteam})')}",
+        f"🅱️ {bold(rname)} {italic(f'({rteam})')}",
+        f"🗓 {h(lsnapshot.week_label)}",
+        "",
+        "📊 <b>Ratings</b>",
+    ]
+
+    category_winners: List[str] = []
+    for category in ["Batting", "Bowling", "All-Rounder"]:
+        icon = CATEGORY_ICONS.get(category, "•")
+        short = CATEGORY_SHORT.get(category, category)
+        lrow = _get_rating_row(lbycat, category)
+        rrow = _get_rating_row(rbycat, category)
+        lr = lrow.get("rating") if lrow else detail_value(ldetails, f"{category.lower()}_rating")
+        rr = rrow.get("rating") if rrow else detail_value(rdetails, f"{category.lower()}_rating")
+        lrank = format_rank(lrow.get("rank")) if lrow else "—"
+        rrank = format_rank(rrow.get("rank")) if rrow else "—"
+        lines.append(f"{icon} <b>{h(short)}</b>")
+        lines.append(f"A {h(lrank)} | {h(format_rating(lr))} pts")
+        lines.append(f"B {h(rrank)} | {h(format_rating(rr))} pts")
+        if as_number(lr) > as_number(rr):
+            category_winners.append(f"{short}: A")
+        elif as_number(rr) > as_number(lr):
+            category_winners.append(f"{short}: B")
+        else:
+            category_winners.append(f"{short}: Tie")
+        lines.append("")
+
+    lines.extend([
+        "📌 <b>Career Snapshot</b>",
+        _comparison_metric("Innings", detail_value(ldetails, "innings"), detail_value(rdetails, "innings")),
+        _comparison_metric("Runs", detail_value(ldetails, "runs"), detail_value(rdetails, "runs")),
+        _comparison_metric("Wickets", detail_value(ldetails, "wickets"), detail_value(rdetails, "wickets")),
+        "",
+        "🔥 <b>Recent Form</b>",
+        _comparison_metric("Bat form", detail_value(ldetails, "batting_recent_form"), detail_value(rdetails, "batting_recent_form")),
+        _comparison_metric("Bowl form", detail_value(ldetails, "bowling_recent_form"), detail_value(rdetails, "bowling_recent_form")),
+        "",
+        "🏆 <b>Quick Result</b>",
+    ])
+
+    # Decide overall winner by all-rounder rating if available, otherwise sum ratings.
+    lar = as_number(detail_value(ldetails, "all_rounder_rating"), default=0)
+    rar = as_number(detail_value(rdetails, "all_rounder_rating"), default=0)
+    if lar == 0:
+        lar = sum(as_number((_get_rating_row(lbycat, c) or {}).get("rating"), default=0) for c in VALID_CATEGORIES)
+    if rar == 0:
+        rar = sum(as_number((_get_rating_row(rbycat, c) or {}).get("rating"), default=0) for c in VALID_CATEGORIES)
+    if lar > rar:
+        winner = f"🅰️ {lname}"
+    elif rar > lar:
+        winner = f"🅱️ {rname}"
+    else:
+        winner = "🤝 Too close to call"
+    lines.append(f"Winner: {h(winner)}")
+    lines.append(f"Breakdown: {h(' | '.join(category_winners))}")
+    return "\n".join(lines).strip()
+
+
+def command_compare(args: List[str]) -> str:
+    parsed = _parse_two_players(args)
+    if not parsed:
+        return "Use like this:\n/compare Pasindu Yasitha\n/compare Pasindu Dilshan vs Yasitha Nawod"
+    left, right, _ = parsed
+    if not left or not right:
+        return "Use like this: /compare Pasindu Yasitha"
+    return format_compare_card(left, right)
+
+
+def command_battle(args: List[str]) -> str:
+    snapshot, rows = store().all_rankings_latest()
+    names: Dict[str, str] = {}
+    for row in rows:
+        name = str(row.get("player") or "").strip()
+        if name:
+            names[normalize_text(name)] = name
+    player_names = sorted(set(names.values()))
+    if len(player_names) < 2:
+        return "Not enough players found for a battle yet."
+    left, right = random.sample(player_names, 2)
+    return "🎲 <b>Random Battle</b>\n\n" + format_compare_card(left, right)
+
+
+def command_teamprofile(args: List[str]) -> str:
+    team_query = " ".join(args).strip()
+    if not team_query:
+        return "Use like this: /teamprofile TITANS"
+
+    snapshot, team_name, team_rows, suggestions = store().team_rankings(team_query, category=None, per_category_limit=10)
+    if not team_name or not team_rows:
+        return _not_found_msg("Team", team_query, suggestions)
+
+    by_category: Dict[str, List[Dict[str, Any]]] = {c: [] for c in VALID_CATEGORIES}
+    for row in team_rows:
+        cat = row.get("category")
+        if cat in by_category:
+            by_category[cat].append(row)
+
+    # Find best recent-form player from rating details if available.
+    form_player = "—"
+    form_score = None
+    try:
+        detail_rows = store().rating_details(snapshot_id=snapshot.id)
+        team_key = normalize_text(team_name)
+        best = None
+        best_score = -10**9
+        for row in detail_rows:
+            if normalize_text(row.get("team")) != team_key:
+                continue
+            details = _safe_detail_data(row)
+            score = as_number(detail_value(details, "batting_recent_form"), default=0) + as_number(detail_value(details, "bowling_recent_form"), default=0)
+            if score > best_score:
+                best_score = score
+                best = row.get("player") or row.get("name")
+        if best:
+            form_player = str(best)
+            form_score = best_score
+    except Exception:
+        # Keep team profile working even if details are missing.
+        pass
+
+    def best_line(category: str, label: str) -> str:
+        rows = by_category.get(category) or []
+        if not rows:
+            return f"{label}: —"
+        row = rows[0]
+        return (
+            f"{label}: {bold(row.get('player') or 'Unknown')}\n"
+            f"   Overall {h(format_rank(row.get('overall_rank')))} | {h(format_rating(row.get('rating')))} pts"
+        )
+
+    lines = [
+        "🏟 <b>HCCL TEAM PROFILE</b>",
+        "",
+        bold(team_name),
+        f"🗓 {h(snapshot.week_label)}",
+        "",
+        "⭐ <b>Team Leaders</b>",
+        best_line("Batting", "🏏 Batter"),
+        "",
+        best_line("Bowling", "🎯 Bowler"),
+        "",
+        best_line("All-Rounder", "👑 All-Rounder"),
+        "",
+        "🔥 <b>In-form Player</b>",
+        f"{h(form_player)}" + (f" | {h(format_rating(form_score))} form pts" if form_score is not None else ""),
+        "",
+        "📋 <b>Quick Top 3</b>",
+    ]
+    for category in VALID_CATEGORIES:
+        rows = by_category.get(category, [])[:3]
+        if not rows:
+            continue
+        lines.append(f"{CATEGORY_ICONS.get(category, '•')} {bold(category)}")
+        for i, row in enumerate(rows, start=1):
+            lines.append(f"{i}) {bold(row.get('player') or 'Unknown')}")
+            lines.append(f"   {h(format_rating(row.get('rating')))} pts | Overall {h(format_rank(row.get('overall_rank')))}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
 def command_weeks(args: List[str]) -> str:
     snapshots = store().list_snapshots(limit=10)
     if not snapshots:
@@ -753,6 +1079,11 @@ COMMANDS = {
     "card": command_card,
     "profiledebug": command_profiledebug,
     "team": command_team,
+    "teamprofile": command_teamprofile,
+    "rank": command_rank,
+    "form": command_form,
+    "compare": command_compare,
+    "battle": command_battle,
     "movers": command_movers,
     "fallers": command_fallers,
     "gains": command_gains,
