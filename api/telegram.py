@@ -61,6 +61,7 @@ HELP_TEXT = """
 🏟 /team DRAGONS — team rankings
 📊 /rank Hasitha — quick ranks
 🔥 /form Hasitha — recent form
+🚨 /expose — worst recent form expose list
 ⚔️ /compare Hasitha Yasitha — compare players
 🎲 /battle — random player battle
 🏟 /teamprofile TITANS — team profile
@@ -94,6 +95,7 @@ COMMAND_DESCRIPTIONS = {
     "teamprofile": "Clean team profile, e.g. /teamprofile TITANS",
     "rank": "Quick player ranks, e.g. /rank Hasitha",
     "form": "Player recent form, e.g. /form Hasitha",
+    "expose": "Top 3 worst recent-form performers",
     "compare": "Compare two players, e.g. /compare Hasitha Yasitha",
     "battle": "Random player battle",
     "movers": "Top rank climbers",
@@ -1056,6 +1058,182 @@ def command_teamprofile(args: List[str]) -> str:
     return "\n".join(lines).strip()
 
 
+
+
+# ---------------------------------------------------------------------------
+# /expose - mobile-first worst recent form report
+# ---------------------------------------------------------------------------
+
+EXPOSE_LABELS = [
+    "සුපිරිම ලොන්තයා",
+    "දෙවෙනි ලොන්තයා",
+    "තුන්වෙනි ලොන්තයා",
+]
+
+
+def _recent_lines(raw: Any) -> List[str]:
+    """Split saved recent-5 text into individual match lines.
+
+    Supports normal multiline CSV text and older accidentally-joined text such as
+    "... POTM No2. 10 runs ...".
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Repair old joined lines before splitting.
+    text = re.sub(r"(?i)(POTM\s*(?:Yes|No|YES|NO))\s*(?=\d+\.)", r"\1\n", text)
+    text = re.sub(r"(?m)^\s*\d+\.\s*", "", text)
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    return lines[:5]
+
+
+def _bat_recent_performances(raw: Any) -> List[str]:
+    output: List[str] = []
+    for line in _recent_lines(raw):
+        if "DNB" in line.upper():
+            output.append("DNB")
+            continue
+        runs_match = re.search(r"(\d+)\s*runs?", line, flags=re.IGNORECASE)
+        if not runs_match:
+            output.append("—")
+            continue
+        runs = runs_match.group(1)
+        not_out = bool(re.search(r"Not\s*out\s*Yes", line, flags=re.IGNORECASE))
+        output.append(f"{runs}{'*' if not_out else ''}")
+    return output[:5]
+
+
+def _bowl_recent_performances(raw: Any) -> List[str]:
+    output: List[str] = []
+    for line in _recent_lines(raw):
+        if "DNB" in line.upper():
+            output.append("DNB")
+            continue
+        w_match = re.search(r"(\d+)\s*Wickets?", line, flags=re.IGNORECASE)
+        # New dashboard saves "Runs Conceded" for new scorecard updates.
+        r_match = re.search(r"(\d+)\s*Runs?\s*Conceded", line, flags=re.IGNORECASE)
+        eco_match = re.search(r"([0-9.]+)\s*Eco", line, flags=re.IGNORECASE)
+        wickets = w_match.group(1) if w_match else "0"
+        if r_match:
+            output.append(f"{wickets}/{r_match.group(1)}")
+        elif eco_match:
+            output.append(f"{wickets}W @ {format_rating(eco_match.group(1))} eco")
+        else:
+            output.append(f"{wickets}W")
+    return output[:5]
+
+
+def _points_list(raw_points: Any) -> List[str]:
+    text = str(raw_points or "").strip()
+    if not text:
+        return []
+    return [p.strip() for p in re.split(r"[,|;/]+", text) if p.strip()][:5]
+
+
+def _perf_line(values: List[str]) -> str:
+    return ", ".join(values) if values else "Recent innings not saved yet"
+
+
+def _expose_candidates(snapshot_id: str) -> List[Dict[str, Any]]:
+    """Return top 3 worst batting recent-form players.
+
+    Rules requested by HCCL:
+    - Only batting performances are considered.
+    - Only players with 100+ career runs are eligible.
+    - Recent-form score is used to rank worst first.
+    - Inning-by-inning batting scores are displayed from saved recent raw data.
+    """
+    rows = store().rating_details(snapshot_id=snapshot_id)
+    candidates: List[Dict[str, Any]] = []
+    seen_players: set[str] = set()
+
+    for row in rows:
+        details = _safe_detail_data(row)
+        player = row.get("player") or detail_value(details, "name", "NAME") or "Unknown"
+        team = row.get("team") or detail_value(details, "team", "TEAM") or "—"
+        player_key = normalize_text(player)
+        if player_key in seen_players:
+            continue
+
+        career_runs = as_number(detail_value(details, "runs", "RUNS", "career_runs", "Career Runs"), default=0)
+        if career_runs < 100:
+            continue
+
+        bat_score_raw = detail_value(details, "batting_recent_form", "Batting Recent Form")
+        if bat_score_raw is None:
+            continue
+
+        bat_raw = detail_value(details, "batting_recent_raw", "Bat Recent 5 Matches", "Batting Recent Raw")
+        bat_points = detail_value(details, "batting_recent_points", "Batting Recent Points")
+
+        seen_players.add(player_key)
+        candidates.append({
+            "player": player,
+            "team": team,
+            "runs": career_runs,
+            "score": as_number(bat_score_raw, default=9999),
+            "score_display": format_rating(bat_score_raw),
+            "performances": _bat_recent_performances(bat_raw),
+            "points": _points_list(bat_points),
+            "raw_available": bool(str(bat_raw or "").strip()),
+        })
+
+    candidates.sort(key=lambda c: (c["score"], c["player"]))
+    return candidates[:3]
+
+
+def command_expose(args: List[str]) -> str:
+    snapshot = store().latest_snapshot()
+    exposed = _expose_candidates(snapshot.id)
+    if not exposed:
+        return (
+            "🚨 <b>HCCL EXPOSE LIST</b>\n\n"
+            "No eligible players found yet.\n"
+            "Eligible players must have 100+ career runs and saved batting recent-form data."
+        )
+
+    lines = [
+        "🚨 <b>HCCL EXPOSE LIST</b> 🚨",
+        f"🗓 {h(snapshot.week_label)} | {h(snapshot.snapshot_date)}",
+        "🏏 Worst batting recent-form performers",
+        "✅ Eligibility: 100+ career runs",
+        "",
+    ]
+
+    raw_missing = False
+    for idx, item in enumerate(exposed, start=1):
+        label = EXPOSE_LABELS[idx - 1] if idx <= len(EXPOSE_LABELS) else f"#{idx}"
+        if not item.get("raw_available"):
+            raw_missing = True
+
+        performances = _perf_line(item.get("performances") or [])
+        lines.extend([
+            f"{medal(idx)} <b>{h(label)}</b>",
+            f"👤 {bold(item['player'])}",
+            f"🏟 {h(item['team'])} | 🏏 {h(format_rating(item.get('runs')))} career runs",
+            "",
+            "🏏 <b>With the bat</b>",
+            f"{h(performances)}",
+            "",
+            f"📉 <b>Recent form score:</b> {h(item['score_display'])}",
+        ])
+        points = item.get("points") or []
+        if points:
+            lines.append(f"🧮 Points: {h(', '.join(points))}")
+        if idx != len(exposed):
+            lines.append("━━━━━━━━━━━━")
+            lines.append("")
+
+    if raw_missing:
+        lines.extend([
+            "",
+            "ℹ️ Inning-by-inning data is missing for some players.",
+            "Update the dashboard to v5.0 and save a fresh Supabase snapshot.",
+        ])
+    return "\n".join(lines)
+
+
 def command_weeks(args: List[str]) -> str:
     snapshots = store().list_snapshots(limit=10)
     if not snapshots:
@@ -1082,6 +1260,7 @@ COMMANDS = {
     "teamprofile": command_teamprofile,
     "rank": command_rank,
     "form": command_form,
+    "expose": command_expose,
     "compare": command_compare,
     "battle": command_battle,
     "movers": command_movers,
