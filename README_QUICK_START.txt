@@ -20,6 +20,16 @@ HCCL Telegram Bot — Vercel Quick Start
    /start
    /topbat
    /player Hasitha
+   /profile Hasitha
+   /card Hasitha
 
 
 IMPORTANT: Keep pyproject.toml in the repo root. Vercel needs it to find api.telegram:handler.
+
+
+Profile Card Commands Added in v1.3
+- /player PlayerName  -> full official profile card
+- /profile PlayerName -> same as /player
+- /card PlayerName    -> compact player card
+
+These commands read both hccl_rankings and hccl_rating_details from the latest saved Supabase snapshot.

@@ -148,3 +148,23 @@ entrypoint = "api.telegram:handler"
 ```
 
 Vercel now runs `uv lock` when `pyproject.toml` exists, so the `[project]` table and dependencies are included here.
+
+
+## v1.3 Profile Cards
+
+This version adds richer Telegram profile cards:
+
+```text
+/player Hasitha
+/profile Hasitha
+/card Hasitha
+```
+
+The full card shows ranking positions, ratings, movement, qualification badges, runs, wickets, recent form, career scores, achievement scores, and best ranking discipline.
+
+No database schema change is required. It uses existing tables:
+
+```text
+hccl_rankings
+hccl_rating_details
+```

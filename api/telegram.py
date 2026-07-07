@@ -26,9 +26,12 @@ from hccl_bot_data import (  # noqa: E402
     BENCHMARK_LABELS,
     HCCLBotError,
     HCCLSupabaseStore,
+    as_bool,
+    as_number,
     format_player_line,
     format_rank,
     format_rating,
+    format_signed,
     parse_category,
 )
 
@@ -45,7 +48,9 @@ Use these commands:
 /topbat - top batting rankings
 /topbowl - top bowling rankings
 /topall - top all-rounder rankings
-/player Hasitha - player profile
+/player Hasitha - full player profile card
+/profile Hasitha - same as /player
+/card Hasitha - compact profile card
 /team DRAGONS - team-wise rankings
 /movers - biggest rank climbers
 /fallers - biggest rank fallers
@@ -66,7 +71,9 @@ COMMAND_DESCRIPTIONS = {
     "topbat": "Top batting rankings",
     "topbowl": "Top bowling rankings",
     "topall": "Top all-rounder rankings",
-    "player": "Player profile, e.g. /player Hasitha",
+    "player": "Full player profile card, e.g. /player Hasitha",
+    "profile": "Full player profile card, e.g. /profile Hasitha",
+    "card": "Compact player profile card, e.g. /card Hasitha",
     "team": "Team rankings, e.g. /team DRAGONS",
     "movers": "Top rank climbers",
     "fallers": "Top rank fallers",
@@ -214,30 +221,150 @@ def command_topall(args: List[str]) -> str:
     return format_top("All-Rounder", parse_limit(args, default_limit()))
 
 
-def command_player(args: List[str]) -> str:
-    query = " ".join(args).strip()
-    if not query:
-        return "Use like this: /player Hasitha"
+def _rank_row_by_category(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    return {str(row.get("category") or ""): row for row in rows}
 
-    snapshot, player_name, rows, suggestions = store().find_player(query)
-    if not rows or not player_name:
+
+def _row_line(icon: str, label: str, row: Optional[Dict[str, Any]], rating_key: str, details: Dict[str, Any]) -> str:
+    if row:
+        rank = format_rank(row.get("rank"))
+        rating = format_rating(row.get("rating"))
+        movement = row.get("movement") or "—"
+        change = row.get("rating_change") or "—"
+        status = row.get("status") or "—"
+        return f"{icon} {label}: {rank} | {rating} pts | {movement} | {change} | {status}"
+    rating = details.get(rating_key)
+    if rating is not None and rating != "":
+        return f"{icon} {label}: — | {format_rating(rating)} pts | — | — | Provisional"
+    return f"{icon} {label}: No rating yet"
+
+
+def _profile_badges(rows_by_category: Dict[str, Dict[str, Any]], details: Dict[str, Any]) -> str:
+    badges: List[str] = []
+    for category, icon in [("Batting", "🏏"), ("Bowling", "🎯"), ("All-Rounder", "👑")]:
+        row = rows_by_category.get(category)
+        if row and str(row.get("rank")) == "1":
+            badges.append(f"{icon} No.1 {category}")
+
+    if as_bool(details.get("batting_qualified")):
+        badges.append("✅ Batting qualified")
+    if as_bool(details.get("bowling_qualified")):
+        badges.append("✅ Bowling qualified")
+    if as_bool(details.get("all_rounder_qualified")):
+        badges.append("✅ All-rounder qualified")
+    return " | ".join(badges) if badges else "Provisional / building profile"
+
+
+def _best_skill(rows_by_category: Dict[str, Dict[str, Any]]) -> str:
+    best_label = "—"
+    best_rank = 10**9
+    for category, row in rows_by_category.items():
+        try:
+            rank = int(row.get("rank") or 0)
+        except Exception:
+            rank = 0
+        if rank and rank < best_rank:
+            best_rank = rank
+            best_label = category
+    return best_label
+
+
+def _safe_detail_data(detail_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not detail_row:
+        return {}
+    data = detail_row.get("data") or {}
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def format_profile_card(query: str, compact: bool = False) -> str:
+    snapshot, player_name, rows, detail_row, suggestions = store().player_profile(query)
+    if not player_name:
         suggestion_text = ""
         if suggestions:
             suggestion_text = "\n\nPossible matches:\n" + "\n".join(f"- {name}" for name in suggestions)
         return f"Player not found: {query}{suggestion_text}"
 
-    lines = [snapshot_header(snapshot, f"👤 HCCL Player Profile: {player_name}")]
-    for row in rows:
-        lines.append(
-            f"{row.get('category')}: {format_rank(row.get('rank'))}\n"
-            f"Rating: {format_rating(row.get('rating'))}\n"
-            f"Previous: {format_rating(row.get('previous_rating'))}\n"
-            f"Change: {row.get('rating_change') or '—'}\n"
-            f"Movement: {row.get('movement') or '—'}\n"
-            f"Status: {row.get('status') or '—'}\n"
-        )
+    details = _safe_detail_data(detail_row)
+    rows_by_category = _rank_row_by_category(rows)
+    team = (detail_row or {}).get("team") or (rows[0].get("team") if rows else "—")
+    player_id = (detail_row or {}).get("player_id") or details.get("player_id") or "—"
+
+    title = "🏏 HCCL PLAYER CARD"
+    lines = [title, f"{player_name} | {team}"]
+    lines.append(f"Week: {snapshot.week_label} | {snapshot.snapshot_date}")
+    lines.append(f"Player ID: {player_id}")
+    lines.append("")
+    lines.append(_profile_badges(rows_by_category, details))
+    lines.append("")
+
+    lines.append(_row_line("🏏", "Batting", rows_by_category.get("Batting"), "batting_rating", details))
+    lines.append(_row_line("🎯", "Bowling", rows_by_category.get("Bowling"), "bowling_rating", details))
+    lines.append(_row_line("👑", "All-Rounder", rows_by_category.get("All-Rounder"), "all_rounder_rating", details))
+
+    if compact:
+        return "\n".join(lines)
+
+    lines.append("")
+    lines.append("📌 Career snapshot")
+    lines.append(
+        f"Innings: {format_rating(details.get('innings'))} | "
+        f"Runs: {format_rating(details.get('runs'))} | "
+        f"Wickets: {format_rating(details.get('wickets'))}"
+    )
+    lines.append(
+        f"Bat recent form: {format_rating(details.get('batting_recent_form'))} | "
+        f"Bowl recent form: {format_rating(details.get('bowling_recent_form'))}"
+    )
+    lines.append(
+        f"Bat career score: {format_rating(details.get('batting_career_score'))} | "
+        f"Bowl career score: {format_rating(details.get('bowling_career_score'))}"
+    )
+    lines.append(
+        f"Bat achievement: {format_rating(details.get('achievement_score_batting'))} | "
+        f"Bowl achievement: {format_rating(details.get('achievement_score_bowling'))} | "
+        f"Experience: {format_rating(details.get('experience_score'))}"
+    )
+
+    lines.append("")
+    lines.append("🔥 Quick read")
+    best_skill = _best_skill(rows_by_category)
+    lines.append(f"Best ranking discipline: {best_skill}")
+
+    # Rating movement summary.
+    movement_bits: List[str] = []
+    for category in ["Batting", "Bowling", "All-Rounder"]:
+        row = rows_by_category.get(category)
+        if row:
+            movement_bits.append(f"{category}: {row.get('movement') or '—'} ({row.get('rating_change') or '—'})")
+    if movement_bits:
+        lines.append("Movement: " + " | ".join(movement_bits))
+
+    lines.append("")
+    lines.append("Commands: /topbat /topbowl /topall /team /report")
     return "\n".join(lines)
 
+
+def command_player(args: List[str]) -> str:
+    query = " ".join(args).strip()
+    if not query:
+        return "Use like this: /player Hasitha"
+    return format_profile_card(query, compact=False)
+
+
+def command_profile(args: List[str]) -> str:
+    query = " ".join(args).strip()
+    if not query:
+        return "Use like this: /profile Hasitha"
+    return format_profile_card(query, compact=False)
+
+
+def command_card(args: List[str]) -> str:
+    query = " ".join(args).strip()
+    if not query:
+        return "Use like this: /card Hasitha"
+    return format_profile_card(query, compact=True)
 
 def command_team(args: List[str]) -> str:
     if not args:
@@ -347,6 +474,8 @@ COMMANDS = {
     "topbowl": command_topbowl,
     "topall": command_topall,
     "player": command_player,
+    "profile": command_profile,
+    "card": command_card,
     "team": command_team,
     "movers": command_movers,
     "fallers": command_fallers,

@@ -116,6 +116,37 @@ def format_player_line(row: Dict[str, Any], include_category: bool = False) -> s
     return f"{rank}. {category}{player} ({team}) — {rating} pts {movement} | {change}"
 
 
+def as_number(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"true", "1", "yes", "y"}
+
+
+def format_signed(value: Any) -> str:
+    if value is None or value == "":
+        return "—"
+    try:
+        number = float(value)
+    except Exception:
+        return str(value)
+    if number == 0:
+        return "0"
+    if number.is_integer():
+        return f"{int(number):+d}"
+    return f"{number:+.1f}"
+
+
 @dataclass
 class Snapshot:
     id: str
@@ -252,6 +283,54 @@ class HCCLSupabaseStore:
             selected = [r for r in selected if r.get("category") == category]
         selected = selected[: per_category_limit if category else per_category_limit * 3]
         return snapshot, chosen_team, selected, []
+
+
+    def rating_details(self, snapshot_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        response = (
+            self.client.table("hccl_rating_details")
+            .select("player_id,player,team,data")
+            .eq("snapshot_id", self._snapshot_id(snapshot_id))
+            .execute()
+        )
+        return response.data or []
+
+    def find_player_details(self, query_text: str, snapshot_id: Optional[str] = None) -> Tuple[Optional[str], Optional[Dict[str, Any]], List[str]]:
+        target = normalize_text(query_text)
+        if not target:
+            return None, None, []
+        rows = self.rating_details(snapshot_id=snapshot_id)
+        grouped: Dict[str, Dict[str, Any]] = {}
+        display_names: Dict[str, str] = {}
+        for row in rows:
+            name = str(row.get("player") or "").strip()
+            key = normalize_text(name)
+            if not key:
+                continue
+            grouped[key] = row
+            display_names[key] = name
+
+        if target in grouped:
+            return display_names[target], grouped[target], []
+        matches = [key for key in grouped if target in key or key in target]
+        if len(matches) == 1:
+            key = matches[0]
+            return display_names[key], grouped[key], []
+        return None, None, [display_names[key] for key in matches[:8]]
+
+    def player_profile(self, query_text: str) -> Tuple[Snapshot, Optional[str], List[Dict[str, Any]], Optional[Dict[str, Any]], List[str]]:
+        snapshot, player_name, ranking_rows, ranking_suggestions = self.find_player(query_text)
+        detail_name, detail_row, detail_suggestions = self.find_player_details(query_text, snapshot_id=snapshot.id)
+
+        final_name = player_name or detail_name
+        suggestions = ranking_suggestions or detail_suggestions
+
+        # If rankings found but detail name differs, attempt exact detail lookup using the ranking display name.
+        if final_name and detail_row is None:
+            _, detail_row, extra_suggestions = self.find_player_details(final_name, snapshot_id=snapshot.id)
+            if not suggestions:
+                suggestions = extra_suggestions
+
+        return snapshot, final_name, ranking_rows, detail_row, suggestions
 
     def weekly_report(self, section: Optional[str] = None, limit: int = 20) -> Tuple[Snapshot, List[Dict[str, Any]]]:
         snapshot = self.latest_snapshot()
