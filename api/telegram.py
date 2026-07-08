@@ -65,6 +65,7 @@ HELP_TEXT = """
 🎖️ /badges Hasitha — player badges/titles
 🧬 /dna Hasitha — player DNA card
 🪜 /climb Hasitha — how to climb rankings
+🔮 /predict AURA TITANS — matchup prediction
 🔥 /hot — hottest recent-form players
 🥶 /cold — coldest recent-form players
 🚨 /expose — worst recent form expose list
@@ -106,6 +107,7 @@ COMMAND_DESCRIPTIONS = {
     "badges": "Player badges and titles, e.g. /badges Hasitha",
     "dna": "Player DNA card, e.g. /dna Hasitha",
     "climb": "How to climb rankings, e.g. /climb Hasitha",
+    "predict": "Team matchup prediction, e.g. /predict AURA TITANS",
     "hot": "Hottest recent-form players",
     "cold": "Coldest recent-form players",
     "expose": "Top 3 worst recent-form performers",
@@ -1558,7 +1560,7 @@ def _power_detail_team(row: Dict[str, Any]) -> str:
     return str(detail_value(details, "team", "TEAM") or row.get("team") or "")
 
 
-def _team_power_rows() -> Tuple[Any, List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+def _team_power_rows_uncached() -> Tuple[Any, List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     store_obj = store()
     snapshot, ranking_rows = store_obj.all_rankings_latest()
     detail_rows = store_obj.rating_details(snapshot_id=snapshot.id)
@@ -1624,6 +1626,35 @@ def _team_power_rows() -> Tuple[Any, List[Dict[str, Any]], List[Dict[str, Any]],
     return snapshot, out, ranking_rows, detail_rows
 
 
+TEAM_POWER_CACHE_TTL_SECONDS = 45
+_TEAM_POWER_CACHE: Dict[str, Any] = {"expires": 0.0, "snapshot": None, "rows": [], "rankings": [], "details": []}
+
+
+def _team_power_rows() -> Tuple[Any, List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Cached team power data for /power, /teamprofile and /predict.
+
+    Keeps repeated Telegram commands fast and avoids multiple Supabase reads in a short period.
+    """
+    now = time.time()
+    cached_snapshot = _TEAM_POWER_CACHE.get("snapshot")
+    if cached_snapshot is not None and now < float(_TEAM_POWER_CACHE.get("expires") or 0):
+        return (
+            cached_snapshot,
+            list(_TEAM_POWER_CACHE.get("rows") or []),
+            list(_TEAM_POWER_CACHE.get("rankings") or []),
+            list(_TEAM_POWER_CACHE.get("details") or []),
+        )
+    snapshot, rows, ranking_rows, detail_rows = _team_power_rows_uncached()
+    _TEAM_POWER_CACHE.update({
+        "expires": now + TEAM_POWER_CACHE_TTL_SECONDS,
+        "snapshot": snapshot,
+        "rows": rows,
+        "rankings": ranking_rows,
+        "details": detail_rows,
+    })
+    return snapshot, rows, ranking_rows, detail_rows
+
+
 def command_power(args: List[str]) -> str:
     snapshot, rows, _, _ = _team_power_rows()
     if not rows:
@@ -1642,6 +1673,139 @@ def command_power(args: List[str]) -> str:
         lines.append(f"   Top 10 players: {h(row['top10'])} | Squad: {h(row['players'])}")
         if row is not rows[:limit][-1]:
             lines.append("")
+    return "\n".join(lines).strip()
+
+
+# -----------------------------
+# Match prediction
+# -----------------------------
+
+def _predict_parse_teams(args: List[str]) -> Optional[Tuple[str, str]]:
+    raw = " ".join(args).strip()
+    if not raw:
+        return None
+    lowered = raw.lower()
+    for sep in [" vs ", " v ", " | ", " - "]:
+        if sep in lowered:
+            idx = lowered.index(sep)
+            left = raw[:idx].strip()
+            right = raw[idx + len(sep):].strip()
+            if left and right:
+                return left, right
+    if "," in raw:
+        left, right = [p.strip() for p in raw.split(",", 1)]
+        if left and right:
+            return left, right
+    if len(args) >= 2:
+        return args[0], " ".join(args[1:]).strip()
+    return None
+
+
+def _predict_find_team(query: str, power_rows: List[Dict[str, Any]]) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    target = _team_norm(query)
+    suggestions = [str(r.get("team") or "") for r in power_rows if r.get("team")]
+    if not target:
+        return None, suggestions
+    for row in power_rows:
+        if _team_equal(row.get("team"), query):
+            return row, suggestions
+    # substring fallback for convenient names such as "aura", "titans", "lords".
+    for row in power_rows:
+        name = str(row.get("team") or "")
+        n = _team_norm(name)
+        if target and (target in n or n in target):
+            return row, suggestions
+    return None, suggestions
+
+
+def _predict_edge(team_a: str, team_b: str, a: float, b: float) -> str:
+    if abs(a - b) < 0.6:
+        return "Even"
+    return team_a if a > b else team_b
+
+
+def _predict_confidence(gap: float) -> str:
+    if gap < 1.5:
+        return "50/50 thriller"
+    if gap < 4:
+        return "Slight edge"
+    if gap < 8:
+        return "Good advantage"
+    return "Strong favorite"
+
+
+def _predict_read(gap: float) -> str:
+    if gap < 1.5:
+        return "This is almost 50/50. One big over can decide it."
+    if gap < 4:
+        return "Small edge only. The underdog can flip this with early wickets."
+    if gap < 8:
+        return "Clear edge on paper, but form can still swing the match."
+    return "Strong favorite on paper. The opponent needs a special performance."
+
+
+def command_predict(args: List[str]) -> str:
+    parsed = _predict_parse_teams(args)
+    if not parsed:
+        return "Use like this:\n/predict AURA TITANS\n/predict AURA vs TITANS"
+
+    left_query, right_query = parsed
+    snapshot, power_rows, _, _ = _team_power_rows()
+    left, suggestions = _predict_find_team(left_query, power_rows)
+    right, _ = _predict_find_team(right_query, power_rows)
+    if not left:
+        return _not_found_msg("Team", left_query, suggestions)
+    if not right:
+        return _not_found_msg("Team", right_query, suggestions)
+    if _team_equal(left.get("team"), right.get("team")):
+        return "Select two different teams. Example: /predict AURA TITANS"
+
+    team_a = str(left.get("team") or "Team A")
+    team_b = str(right.get("team") or "Team B")
+    power_a = as_number(left.get("power"), default=0)
+    power_b = as_number(right.get("power"), default=0)
+    gap = abs(power_a - power_b)
+
+    bat_edge = _predict_edge(team_a, team_b, as_number(left.get("bat")), as_number(right.get("bat")))
+    bowl_edge = _predict_edge(team_a, team_b, as_number(left.get("bowl")), as_number(right.get("bowl")))
+    ar_edge = _predict_edge(team_a, team_b, as_number(left.get("ar")), as_number(right.get("ar")))
+    form_edge = _predict_edge(team_a, team_b, as_number(left.get("form")), as_number(right.get("form")))
+
+    if gap < 1.5:
+        prediction = "🤝 Too close to call"
+    elif power_a > power_b:
+        prediction = f"🏆 {team_a}"
+    else:
+        prediction = f"🏆 {team_b}"
+
+    lines = [
+        "🔮 <b>HCCL MATCHUP PREVIEW</b>",
+        f"🗓 {h(snapshot.week_label)}",
+        "📊 Based on Team Power, leaders and recent form",
+        "",
+        f"🅰️ {bold(team_a)} — <b>{h(format_rating(power_a))}</b>/100",
+        f"🅱️ {bold(team_b)} — <b>{h(format_rating(power_b))}</b>/100",
+        "",
+        f"🏆 <b>Prediction:</b> {h(prediction)}",
+        f"📏 <b>Gap:</b> {h(format_rating(gap))} power pts",
+        f"🎚️ <b>Confidence:</b> {h(_predict_confidence(gap))}",
+        "",
+        "⚔️ <b>Category Edges</b>",
+        f"🏏 Batting Edge: <b>{h(bat_edge)}</b>",
+        f"🎯 Bowling Edge: <b>{h(bowl_edge)}</b>",
+        f"👑 All-Round Edge: <b>{h(ar_edge)}</b>",
+        f"🔥 Form Edge: <b>{h(form_edge)}</b>",
+        "",
+        "🌟 <b>Key Players</b>",
+        f"{h(team_a)}: {h(left.get('top_ar') or left.get('top_batter') or left.get('top_bowler') or '—')}",
+        f"{h(team_b)}: {h(right.get('top_ar') or right.get('top_batter') or right.get('top_bowler') or '—')}",
+        "",
+        "🔥 <b>Danger Form Players</b>",
+        f"{h(team_a)}: {h(left.get('form_player') or '—')}",
+        f"{h(team_b)}: {h(right.get('form_player') or '—')}",
+        "",
+        f"🧠 <b>Read:</b> {h(_predict_read(gap))}",
+    ]
     return "\n".join(lines).strip()
 
 
@@ -2087,6 +2251,7 @@ COMMANDS = {
     "badges": command_badges,
     "dna": command_dna,
     "climb": command_climb,
+    "predict": command_predict,
     "hot": command_hot,
     "cold": command_cold,
     "expose": command_expose,
