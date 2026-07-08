@@ -95,3 +95,10 @@ In a group, use the bot username when needed:
 ## v2.0 /expose command
 
 New command: `/expose` shows the top 3 worst batting recent-form performers with Sinhala labels, emoji styling, inning-by-inning batting scores, and recent form scores. Only players with 100+ career runs are eligible. For full inning-by-inning output, save rankings from Dashboard v5.0 or newer so raw recent-5 data is stored in Supabase.
+
+
+## v2.1 Update - Team Power Rankings
+
+- Adds `/power` command for HCCL Team Power Rankings.
+- Enhances `/teamprofile TEAM` with power score, top-10 count, squad count and category strengths.
+- Power formula: 35% batting + 35% bowling + 20% all-round + 10% recent form, scaled out of 100.

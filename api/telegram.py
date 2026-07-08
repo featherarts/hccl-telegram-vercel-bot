@@ -65,6 +65,7 @@ HELP_TEXT = """
 ⚔️ /compare Hasitha Yasitha — compare players
 🎲 /battle — random player battle
 🏟 /teamprofile TITANS — team profile
+🏆 /power — team power rankings
 
 <b>Weekly movement</b>
 📈 /movers — biggest climbers
@@ -93,6 +94,7 @@ COMMAND_DESCRIPTIONS = {
     "profiledebug": "Debug profile data, e.g. /profiledebug Hasitha",
     "team": "Team rankings, e.g. /team DRAGONS",
     "teamprofile": "Clean team profile, e.g. /teamprofile TITANS",
+    "power": "Team power rankings",
     "rank": "Quick player ranks, e.g. /rank Hasitha",
     "form": "Player recent form, e.g. /form Hasitha",
     "expose": "Top 3 worst recent-form performers",
@@ -980,6 +982,138 @@ def command_battle(args: List[str]) -> str:
     return "🎲 <b>Random Battle</b>\n\n" + format_compare_card(left, right)
 
 
+# -----------------------------
+# Team power rankings
+# -----------------------------
+
+def _team_norm(value: Any) -> str:
+    text = normalize_text(value)
+    aliases = {
+        "auradynasty": "aura", "aura": "aura",
+        "velocityreapers": "reapers", "reapers": "reapers",
+        "superfiredragons": "dragons", "dragons": "dragons",
+        "matrix": "matrix",
+        "silenttearz": "tearz", "silenttears": "tearz", "tearz": "tearz", "tears": "tearz",
+        "invinciblelords": "lords", "lords": "lords",
+        "mindgamers": "gamers", "gamers": "gamers",
+        "wizardtitans": "titans", "titans": "titans",
+    }
+    return aliases.get(text, text)
+
+
+def _team_equal(a: Any, b: Any) -> bool:
+    return _team_norm(a) == _team_norm(b)
+
+
+def _team_avg_top(rows: List[Dict[str, Any]], team: str, category: str, n: int = 3) -> float:
+    vals = [as_number(r.get("rating"), default=0) for r in rows if r.get("category") == category and _team_equal(r.get("team"), team)]
+    vals = sorted([v for v in vals if v > 0], reverse=True)[:n]
+    return sum(vals) / len(vals) if vals else 0.0
+
+
+def _team_top_player(rows: List[Dict[str, Any]], team: str, category: str) -> Optional[Dict[str, Any]]:
+    matches = [r for r in rows if r.get("category") == category and _team_equal(r.get("team"), team)]
+    matches.sort(key=lambda r: int(as_number(r.get("rank"), default=9999)))
+    return matches[0] if matches else None
+
+
+def _power_detail_name(row: Dict[str, Any]) -> str:
+    details = _safe_detail_data(row)
+    return str(detail_value(details, "player", "name", "NAME") or row.get("player") or "")
+
+
+def _power_detail_team(row: Dict[str, Any]) -> str:
+    details = _safe_detail_data(row)
+    return str(detail_value(details, "team", "TEAM") or row.get("team") or "")
+
+
+def _team_power_rows() -> Tuple[Any, List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
+    store_obj = store()
+    snapshot, ranking_rows = store_obj.all_rankings_latest()
+    detail_rows = store_obj.rating_details(snapshot_id=snapshot.id)
+
+    teams: Dict[str, str] = {}
+    for r in ranking_rows:
+        team = str(r.get("team") or "").strip()
+        if team:
+            teams.setdefault(_team_norm(team), team)
+    for d in detail_rows:
+        team = _power_detail_team(d)
+        if team:
+            teams.setdefault(_team_norm(team), team)
+
+    out: List[Dict[str, Any]] = []
+    for team_key, team_name in teams.items():
+        bat = _team_avg_top(ranking_rows, team_name, "Batting") / 10.0
+        bowl = _team_avg_top(ranking_rows, team_name, "Bowling") / 10.0
+        ar = _team_avg_top(ranking_rows, team_name, "All-Rounder") / 10.0
+
+        form_scores: List[Tuple[float, str]] = []
+        player_count = 0
+        for d in detail_rows:
+            if not _team_equal(_power_detail_team(d), team_name):
+                continue
+            player_count += 1
+            details = _safe_detail_data(d)
+            name = _power_detail_name(d)
+            combined = as_number(detail_value(details, "batting_recent_form"), default=0) + as_number(detail_value(details, "bowling_recent_form"), default=0)
+            if combined > 0:
+                form_scores.append((max(0.0, min(100.0, combined)), name))
+        form_scores.sort(reverse=True, key=lambda x: x[0])
+        top_form = form_scores[:3]
+        form = sum(v for v, _ in top_form) / len(top_form) if top_form else 0.0
+        form_player = top_form[0][1] if top_form else "—"
+
+        pieces = [(bat, 0.35), (bowl, 0.35), (ar, 0.20), (form, 0.10)]
+        available = [(v, w) for v, w in pieces if v > 0]
+        power = sum(v * w for v, w in available) / sum(w for _, w in available) if available else 0.0
+
+        top10 = set()
+        for r in ranking_rows:
+            if _team_equal(r.get("team"), team_name) and as_number(r.get("rank"), 9999) <= 10:
+                top10.add(str(r.get("player") or ""))
+
+        out.append({
+            "team": team_name,
+            "power": round(power, 1),
+            "bat": round(bat, 1),
+            "bowl": round(bowl, 1),
+            "ar": round(ar, 1),
+            "form": round(form, 1),
+            "top_batter": (_team_top_player(ranking_rows, team_name, "Batting") or {}).get("player") or "—",
+            "top_bowler": (_team_top_player(ranking_rows, team_name, "Bowling") or {}).get("player") or "—",
+            "top_ar": (_team_top_player(ranking_rows, team_name, "All-Rounder") or {}).get("player") or "—",
+            "form_player": form_player,
+            "top10": len([p for p in top10 if p]),
+            "players": player_count,
+        })
+    out.sort(key=lambda r: r.get("power") or 0, reverse=True)
+    for i, r in enumerate(out, start=1):
+        r["rank"] = i
+    return snapshot, out, ranking_rows, detail_rows
+
+
+def command_power(args: List[str]) -> str:
+    snapshot, rows, _, _ = _team_power_rows()
+    if not rows:
+        return "No team power data found yet."
+    limit = parse_limit(args, 8)
+    lines = [
+        "🏆 <b>HCCL TEAM POWER RANKINGS</b>",
+        f"🗓 {h(snapshot.week_label)}",
+        "📊 Formula: Bat 35% • Bowl 35% • AR 20% • Form 10%",
+        "",
+    ]
+    for row in rows[:limit]:
+        lines.append(f"{medal(int(row['rank']))} {bold(row['team'])}")
+        lines.append(f"   ⚡ Power: <b>{h(row['power'])}</b>/100")
+        lines.append(f"   🏏 {h(row['bat'])} | 🎯 {h(row['bowl'])} | 👑 {h(row['ar'])} | 🔥 {h(row['form'])}")
+        lines.append(f"   Top 10 players: {h(row['top10'])} | Squad: {h(row['players'])}")
+        if row is not rows[:limit][-1]:
+            lines.append("")
+    return "\n".join(lines).strip()
+
+
 def command_teamprofile(args: List[str]) -> str:
     team_query = " ".join(args).strip()
     if not team_query:
@@ -994,6 +1128,17 @@ def command_teamprofile(args: List[str]) -> str:
         cat = row.get("category")
         if cat in by_category:
             by_category[cat].append(row)
+
+    # Team power summary if available.
+    power_row = None
+    try:
+        _, power_rows, _, _ = _team_power_rows()
+        for prow in power_rows:
+            if _team_equal(prow.get("team"), team_name):
+                power_row = prow
+                break
+    except Exception:
+        power_row = None
 
     # Find best recent-form player from rating details if available.
     form_player = "—"
@@ -1033,6 +1178,11 @@ def command_teamprofile(args: List[str]) -> str:
         "",
         bold(team_name),
         f"🗓 {h(snapshot.week_label)}",
+        "",
+        "⚡ <b>Power Summary</b>",
+        f"Power Score: <b>{h(power_row.get('power') if power_row else '—')}</b>/100",
+        f"Top 10 players: {h(power_row.get('top10') if power_row else '—')} | Squad: {h(power_row.get('players') if power_row else '—')}",
+        f"🏏 {h(power_row.get('bat') if power_row else '—')} | 🎯 {h(power_row.get('bowl') if power_row else '—')} | 👑 {h(power_row.get('ar') if power_row else '—')} | 🔥 {h(power_row.get('form') if power_row else '—')}",
         "",
         "⭐ <b>Team Leaders</b>",
         best_line("Batting", "🏏 Batter"),
@@ -1258,6 +1408,7 @@ COMMANDS = {
     "profiledebug": command_profiledebug,
     "team": command_team,
     "teamprofile": command_teamprofile,
+    "power": command_power,
     "rank": command_rank,
     "form": command_form,
     "expose": command_expose,

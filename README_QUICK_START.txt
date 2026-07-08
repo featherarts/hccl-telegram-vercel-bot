@@ -32,3 +32,6 @@ Important: Keep pyproject.toml in the repo root. Vercel needs it to find api.tel
 ## v2.0 /expose command
 
 New command: `/expose` shows the top 3 worst batting recent-form performers with Sinhala labels, emoji styling, inning-by-inning batting scores, and recent form scores. Only players with 100+ career runs are eligible. For full inning-by-inning output, save rankings from Dashboard v5.0 or newer so raw recent-5 data is stored in Supabase.
+
+
+New in v2.1: /power and enhanced /teamprofile TEAM with team power score.
