@@ -35,3 +35,10 @@ New command: `/expose` shows the top 3 worst batting recent-form performers with
 
 
 New in v2.1: /power and enhanced /teamprofile TEAM with team power score.
+
+
+New in v2.2: `/hot` and `/cold` recent-form tracker commands.
+- `/hot` shows hottest overall recent-form players.
+- `/cold` shows coldest overall recent-form players.
+- Optional: `/hot batting`, `/hot bowling`, `/cold batting`, `/cold bowling`.
+- Uses a short in-memory cache so Telegram replies stay fast.

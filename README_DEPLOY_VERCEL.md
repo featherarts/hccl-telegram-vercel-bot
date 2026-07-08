@@ -102,3 +102,10 @@ New command: `/expose` shows the top 3 worst batting recent-form performers with
 - Adds `/power` command for HCCL Team Power Rankings.
 - Enhances `/teamprofile TEAM` with power score, top-10 count, squad count and category strengths.
 - Power formula: 35% batting + 35% bowling + 20% all-round + 10% recent form, scaled out of 100.
+
+
+New in v2.2: `/hot` and `/cold` recent-form tracker commands.
+- `/hot` shows hottest overall recent-form players.
+- `/cold` shows coldest overall recent-form players.
+- Optional: `/hot batting`, `/hot bowling`, `/cold batting`, `/cold bowling`.
+- Uses a short in-memory cache so Telegram replies stay fast.

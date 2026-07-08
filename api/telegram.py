@@ -15,6 +15,7 @@ import random
 import re
 import sys
 import traceback
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -61,6 +62,8 @@ HELP_TEXT = """
 🏟 /team DRAGONS — team rankings
 📊 /rank Hasitha — quick ranks
 🔥 /form Hasitha — recent form
+🔥 /hot — hottest recent-form players
+🥶 /cold — coldest recent-form players
 🚨 /expose — worst recent form expose list
 ⚔️ /compare Hasitha Yasitha — compare players
 🎲 /battle — random player battle
@@ -97,6 +100,8 @@ COMMAND_DESCRIPTIONS = {
     "power": "Team power rankings",
     "rank": "Quick player ranks, e.g. /rank Hasitha",
     "form": "Player recent form, e.g. /form Hasitha",
+    "hot": "Hottest recent-form players",
+    "cold": "Coldest recent-form players",
     "expose": "Top 3 worst recent-form performers",
     "compare": "Compare two players, e.g. /compare Hasitha Yasitha",
     "battle": "Random player battle",
@@ -1209,6 +1214,148 @@ def command_teamprofile(args: List[str]) -> str:
 
 
 
+# -----------------------------
+# Hot / cold recent-form tracker
+# -----------------------------
+
+_FORM_TRACKER_CACHE: Dict[str, Any] = {"expires": 0.0, "snapshot": None, "rows": []}
+FORM_CACHE_TTL_SECONDS = 45
+
+
+def _form_mood(score: float, hot: bool = True) -> str:
+    if score >= 75:
+        return "🔥 Elite"
+    if score >= 50:
+        return "🟢 Hot"
+    if score >= 25:
+        return "🟡 Steady"
+    if score >= 0:
+        return "🔵 Low"
+    return "🥶 Cold"
+
+
+def _build_form_rows(detail_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in detail_rows:
+        details = _safe_detail_data(row)
+        player = str(row.get("player") or detail_value(details, "player", "name", "NAME") or "").strip()
+        team = str(row.get("team") or detail_value(details, "team", "TEAM") or "—").strip()
+        if not player:
+            continue
+        key = normalize_text(player)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        runs = as_number(detail_value(details, "runs", "RUNS", "career_runs", "Career Runs"), default=0)
+        wickets = as_number(detail_value(details, "wickets", "WICKETS", "career_wickets", "Career Wickets"), default=0)
+        if runs < 100 and wickets < 10:
+            continue
+
+        bat_raw = detail_value(details, "batting_recent_form", "Batting Recent Form", "bat_recent_form")
+        bowl_raw = detail_value(details, "bowling_recent_form", "Bowling Recent Form", "bowl_recent_form")
+        if bat_raw is None and bowl_raw is None:
+            continue
+
+        bat = as_number(bat_raw, default=0)
+        bowl = as_number(bowl_raw, default=0)
+        overall = max(-25.0, min(100.0, bat + bowl))
+        rows.append({
+            "player": player,
+            "team": team or "—",
+            "overall": round(overall, 1),
+            "bat": round(bat, 1),
+            "bowl": round(bowl, 1),
+            "runs": int(runs) if float(runs).is_integer() else round(runs, 1),
+            "wickets": int(wickets) if float(wickets).is_integer() else round(wickets, 1),
+            "mood": _form_mood(overall),
+        })
+    return rows
+
+
+def _form_tracker_data() -> Tuple[Any, List[Dict[str, Any]]]:
+    now = time.time()
+    cached_snapshot = _FORM_TRACKER_CACHE.get("snapshot")
+    if cached_snapshot is not None and now < float(_FORM_TRACKER_CACHE.get("expires") or 0):
+        return cached_snapshot, list(_FORM_TRACKER_CACHE.get("rows") or [])
+
+    store_obj = store()
+    snapshot = store_obj.latest_snapshot()
+    detail_rows = store_obj.rating_details(snapshot_id=snapshot.id)
+    rows = _build_form_rows(detail_rows)
+    _FORM_TRACKER_CACHE.update({"expires": now + FORM_CACHE_TTL_SECONDS, "snapshot": snapshot, "rows": rows})
+    return snapshot, rows
+
+
+def _format_form_list(snapshot: Any, rows: List[Dict[str, Any]], *, title: str, sort_key: str, reverse: bool, limit: int, cold: bool = False) -> str:
+    if not rows:
+        return (
+            f"{title}\n\n"
+            "No eligible recent-form data found yet.\n"
+            "Eligibility: 100+ career runs or 10+ wickets."
+        )
+
+    rows = sorted(rows, key=lambda r: (as_number(r.get(sort_key), default=0), str(r.get("player") or "")), reverse=reverse)[:limit]
+    lines = [
+        title,
+        f"🗓 {h(snapshot.week_label)}",
+        "✅ Eligible: 100+ runs or 10+ wickets",
+        "",
+    ]
+    for i, row in enumerate(rows, start=1):
+        lines.append(f"{medal(i)} {bold(row.get('player'))} <i>({h(row.get('team'))})</i>")
+        if sort_key == "bat":
+            lines.append(f"   🏏 Bat Form: <b>{h(format_rating(row.get('bat')))}</b> | Overall {h(format_rating(row.get('overall')))}")
+        elif sort_key == "bowl":
+            lines.append(f"   🎯 Bowl Form: <b>{h(format_rating(row.get('bowl')))}</b> | Overall {h(format_rating(row.get('overall')))}")
+        else:
+            lines.append(f"   {'🥶' if cold else '🔥'} Overall: <b>{h(format_rating(row.get('overall')))}</b> | {h(row.get('mood'))}")
+        lines.append(f"   🏏 {h(format_rating(row.get('bat')))} | 🎯 {h(format_rating(row.get('bowl')))}")
+        lines.append(f"   Runs: {h(format_rating(row.get('runs')))} | Wkts: {h(format_rating(row.get('wickets')))}")
+        if i != len(rows):
+            lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _form_sort_mode(args: List[str], default_limit: int = 5) -> Tuple[str, int]:
+    mode = "overall"
+    limit = default_limit
+    if args:
+        first = normalize_text(args[0])
+        if first in {"bat", "batting", "batter"}:
+            mode = "bat"
+            limit = parse_limit(args[1:], default_limit)
+        elif first in {"bowl", "bowling", "bowler"}:
+            mode = "bowl"
+            limit = parse_limit(args[1:], default_limit)
+        else:
+            limit = parse_limit(args, default_limit)
+    return mode, max(1, min(10, limit))
+
+
+def command_hot(args: List[str]) -> str:
+    snapshot, rows = _form_tracker_data()
+    mode, limit = _form_sort_mode(args, default_limit=5)
+    title = "🔥 <b>HCCL HOT FORM PLAYERS</b>"
+    if mode == "bat":
+        title = "🏏 <b>HCCL HOT BATTING FORM</b>"
+    elif mode == "bowl":
+        title = "🎯 <b>HCCL HOT BOWLING FORM</b>"
+    return _format_form_list(snapshot, rows, title=title, sort_key=mode if mode != "overall" else "overall", reverse=True, limit=limit)
+
+
+def command_cold(args: List[str]) -> str:
+    snapshot, rows = _form_tracker_data()
+    mode, limit = _form_sort_mode(args, default_limit=5)
+    title = "🥶 <b>HCCL COLD FORM PLAYERS</b>"
+    if mode == "bat":
+        title = "🥶🏏 <b>HCCL COLD BATTING FORM</b>"
+    elif mode == "bowl":
+        title = "🥶🎯 <b>HCCL COLD BOWLING FORM</b>"
+    return _format_form_list(snapshot, rows, title=title, sort_key=mode if mode != "overall" else "overall", reverse=False, limit=limit, cold=True)
+
+
 
 # ---------------------------------------------------------------------------
 # /expose - mobile-first worst recent form report
@@ -1411,6 +1558,8 @@ COMMANDS = {
     "power": command_power,
     "rank": command_rank,
     "form": command_form,
+    "hot": command_hot,
+    "cold": command_cold,
     "expose": command_expose,
     "compare": command_compare,
     "battle": command_battle,
