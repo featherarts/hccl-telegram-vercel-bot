@@ -64,6 +64,7 @@ HELP_TEXT = """
 🔥 /form Hasitha — recent form
 🎖️ /badges Hasitha — player badges/titles
 🧬 /dna Hasitha — player DNA card
+🪜 /climb Hasitha — how to climb rankings
 🔥 /hot — hottest recent-form players
 🥶 /cold — coldest recent-form players
 🚨 /expose — worst recent form expose list
@@ -104,6 +105,7 @@ COMMAND_DESCRIPTIONS = {
     "form": "Player recent form, e.g. /form Hasitha",
     "badges": "Player badges and titles, e.g. /badges Hasitha",
     "dna": "Player DNA card, e.g. /dna Hasitha",
+    "climb": "How to climb rankings, e.g. /climb Hasitha",
     "hot": "Hottest recent-form players",
     "cold": "Coldest recent-form players",
     "expose": "Top 3 worst recent-form performers",
@@ -1163,6 +1165,228 @@ def command_dna(args: List[str]) -> str:
     ]
     return "\n".join(lines)
 
+# ---------------------------------------------------------------------------
+# /climb — fast ranking target and action plan.
+# Uses a short cache so repeated player lookups do not hammer Supabase.
+# ---------------------------------------------------------------------------
+
+CLIMB_CACHE_TTL_SECONDS = 45
+_CLIMB_CACHE: Dict[str, Any] = {"expires": 0.0, "snapshot": None, "rankings": [], "details": []}
+
+
+def _climb_dataset() -> Tuple[Any, List[Dict[str, Any]], List[Dict[str, Any]]]:
+    now = time.time()
+    cached_snapshot = _CLIMB_CACHE.get("snapshot")
+    if cached_snapshot is not None and now < float(_CLIMB_CACHE.get("expires") or 0):
+        return cached_snapshot, list(_CLIMB_CACHE.get("rankings") or []), list(_CLIMB_CACHE.get("details") or [])
+
+    store_obj = store()
+    snapshot, rankings = store_obj.all_rankings_latest()
+    details = store_obj.rating_details(snapshot_id=snapshot.id)
+    _CLIMB_CACHE.update({"expires": now + CLIMB_CACHE_TTL_SECONDS, "snapshot": snapshot, "rankings": rankings, "details": details})
+    return snapshot, rankings, details
+
+
+def _climb_rating(row: Optional[Dict[str, Any]], details: Dict[str, Any], category: str) -> float:
+    if row and row.get("rating") not in (None, ""):
+        return as_number(row.get("rating"), default=0)
+    if category == "Batting":
+        return as_number(detail_value(details, "batting_rating", "Batting Rating"), default=0)
+    if category == "Bowling":
+        return as_number(detail_value(details, "bowling_rating", "Bowling Rating"), default=0)
+    return as_number(detail_value(details, "all_rounder_rating", "All-Rounder Rating", "All Rounder Rating"), default=0)
+
+
+def _climb_rank(row: Optional[Dict[str, Any]]) -> int:
+    return _badge_rank_int((row or {}).get("rank"))
+
+
+def _climb_requested_category(args: List[str]) -> Tuple[str, Optional[str]]:
+    if len(args) >= 2:
+        last = args[-1]
+        norm = normalize_text(last)
+        category_alias_keys = {"bat", "batting", "batsman", "batter", "bowl", "bowling", "bowler", "all", "ar", "allrounder", "allround", "allrounders"}
+        if norm in category_alias_keys:
+            return " ".join(args[:-1]).strip(), parse_category(last, default="All-Rounder")
+    return " ".join(args).strip(), None
+
+
+def _lookup_climb_player(query: str, ranking_rows: List[Dict[str, Any]], detail_rows: List[Dict[str, Any]]):
+    target = normalize_text(query)
+    ranking_grouped: Dict[str, List[Dict[str, Any]]] = {}
+    display_names: Dict[str, str] = {}
+    for row in ranking_rows:
+        name = str(row.get("player") or "").strip()
+        key = normalize_text(name)
+        if not key:
+            continue
+        ranking_grouped.setdefault(key, []).append(row)
+        display_names.setdefault(key, name)
+
+    detail_grouped: Dict[str, Dict[str, Any]] = {}
+    for drow in detail_rows:
+        details = _safe_detail_data(drow)
+        name = str((drow.get("player") if isinstance(drow, dict) else None) or detail_value(details, "player", "Player", "NAME", "name") or "").strip()
+        key = normalize_text(name)
+        if not key:
+            continue
+        detail_grouped[key] = drow
+        display_names.setdefault(key, name)
+
+    keys = set(ranking_grouped) | set(detail_grouped)
+    if target in keys:
+        key = target
+    else:
+        matches = [k for k in keys if target in k or k in target]
+        if len(matches) != 1:
+            suggestions = [display_names[k] for k in matches[:8]] if matches else [display_names[k] for k in sorted(keys)[:8]]
+            return None, [], None, suggestions
+        key = matches[0]
+
+    rows = sorted(ranking_grouped.get(key, []), key=lambda r: VALID_CATEGORIES.index(r.get("category")) if r.get("category") in VALID_CATEGORIES else 99)
+    detail_row = detail_grouped.get(key)
+    return display_names.get(key), rows, detail_row, []
+
+
+def _next_target_row(category_rows: List[Dict[str, Any]], current_row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    current_key = normalize_text(current_row.get("player"))
+    ordered = sorted(category_rows, key=lambda r: (_climb_rank(r), -as_number(r.get("rating"), default=0), str(r.get("player") or "")))
+    for idx, row in enumerate(ordered):
+        if normalize_text(row.get("player")) == current_key:
+            return ordered[idx - 1] if idx > 0 else None
+    return None
+
+
+def _climb_plan(category: str, gap: float, rows_by_category: Dict[str, Dict[str, Any]], details: Dict[str, Any]) -> List[str]:
+    bat_rating = _climb_rating(rows_by_category.get("Batting"), details, "Batting")
+    bowl_rating = _climb_rating(rows_by_category.get("Bowling"), details, "Bowling")
+    bat_form = as_number(detail_value(details, "batting_recent_form", "Batting Recent Form"), default=0)
+    bowl_form = as_number(detail_value(details, "bowling_recent_form", "Bowling Recent Form"), default=0)
+    runs = as_number(detail_value(details, "runs", "RUNS", "Career Runs"), default=0)
+    wickets = as_number(detail_value(details, "wickets", "WICKETS", "Career Wickets"), default=0)
+
+    plan: List[str] = []
+    if category == "Batting":
+        if bat_form < 15:
+            plan.append("🏏 Score 20+ runs next match to repair batting form.")
+        elif gap <= 10:
+            plan.append("🏏 One solid 10–15 run innings can be enough.")
+        else:
+            plan.append("🏏 Target 25+ runs or a highest-scorer/POTM innings.")
+        if runs < 300:
+            plan.append("📈 Keep adding career runs to lift the career base.")
+        plan.append("⚡ Keep strike rate high, but avoid another low-score dismissal.")
+    elif category == "Bowling":
+        if bowl_form < 25:
+            plan.append("🎯 Take 2+ wickets next match to boost bowling form.")
+        elif gap <= 10:
+            plan.append("🎯 A 1–2 wicket spell with good economy can push him up.")
+        else:
+            plan.append("🎯 Target a match-winning 2–3 wicket spell.")
+        if wickets < 30:
+            plan.append("📈 More career wickets will improve the career bowling base.")
+        plan.append("🛡️ Cheap overs matter; try to keep economy under control.")
+    else:
+        if bat_rating < bowl_rating - 80 or bat_form < bowl_form - 20:
+            plan.append("🏏 Batting is the quickest side to improve right now.")
+            plan.append("🔥 Aim for 15–20 runs plus at least 1 wicket.")
+        elif bowl_rating < bat_rating - 80 or bowl_form < bat_form - 20:
+            plan.append("🎯 Bowling is the quickest side to improve right now.")
+            plan.append("🔥 Aim for 1–2 wickets plus useful batting runs.")
+        else:
+            plan.append("⚔️ Balanced impact is key: 15+ runs and 1+ wicket.")
+            plan.append("🏆 A POTM-level match can create the biggest jump.")
+        if runs < 100:
+            plan.append("🏏 Cross 100 career runs to strengthen AR eligibility.")
+        if wickets < 10:
+            plan.append("🎯 Cross 10 career wickets to strengthen AR eligibility.")
+
+    if gap > 25:
+        plan.append("⏳ This is a multi-match climb; consistency matters most.")
+    return plan[:4]
+
+
+def command_climb(args: List[str]) -> str:
+    query, requested_category = _climb_requested_category(args)
+    if not query:
+        return "Use like this: /climb Hasitha or /climb Hasitha batting"
+
+    snapshot, ranking_rows, detail_rows = _climb_dataset()
+    player_name, rows, detail_row, suggestions = _lookup_climb_player(query, ranking_rows, detail_rows)
+    if not player_name:
+        return _not_found_msg("Player", query, suggestions)
+
+    details = _safe_detail_data(detail_row)
+    rows_by_category = _rank_row_by_category(rows)
+    team = (detail_row or {}).get("team") or detail_value(details, "team", "Team", "TEAM") or (rows[0].get("team") if rows else "—")
+    available = [c for c in ["All-Rounder", "Batting", "Bowling"] if c in rows_by_category]
+    if requested_category and requested_category in rows_by_category:
+        category = requested_category
+    elif requested_category and requested_category not in rows_by_category:
+        category = requested_category
+    elif "All-Rounder" in rows_by_category:
+        category = "All-Rounder"
+    elif rows_by_category:
+        category = _best_skill(rows_by_category)
+    else:
+        category = requested_category or "Batting"
+
+    current_row = rows_by_category.get(category)
+    if not current_row:
+        available_text = ", ".join(available) if available else "no official ranking yet"
+        return (
+            "🪜 <b>HCCL HOW TO CLIMB</b>\n\n"
+            f"{bold(player_name)} {italic(f'({team})')}\n"
+            f"🗓 {h(snapshot.week_label)}\n\n"
+            f"Not ranked in {h(category)} yet. Available: {h(available_text)}.\n"
+            "Build eligibility first, then this command can show the next target."
+        )
+
+    category_rows = [r for r in ranking_rows if r.get("category") == category]
+    target_row = _next_target_row(category_rows, current_row)
+    current_rating = _climb_rating(current_row, details, category)
+    current_rank = _climb_rank(current_row)
+    target_rating = as_number((target_row or {}).get("rating"), default=0)
+    gap = max(0.0, target_rating - current_rating)
+    if target_row and gap < 0.1:
+        gap = 0.1
+
+    bat_form = detail_value(details, "batting_recent_form", "Batting Recent Form")
+    bowl_form = detail_value(details, "bowling_recent_form", "Bowling Recent Form")
+    badge_list = player_badges(rows_by_category, details, max_badges=4)
+    plan = _climb_plan(category, gap, rows_by_category, details)
+
+    lines = [
+        "🪜 <b>HCCL HOW TO CLIMB</b>",
+        "",
+        f"{bold(player_name)} {italic(f'({team})')}",
+        f"🗓 {h(snapshot.week_label)}",
+        f"🎖️ {h(' | '.join(badge_list))}",
+        "",
+        f"🎯 <b>Target category:</b> {h(category)}",
+        f"📍 <b>Current:</b> {h(format_rank(current_rank))} • {h(format_rating(current_rating))} pts",
+    ]
+    if target_row:
+        lines.extend([
+            f"👀 <b>Next target:</b> {h(format_rank(target_row.get('rank')))} {bold(target_row.get('player') or 'Unknown')}",
+            f"📏 <b>Rating gap:</b> about +{h(format_rating(gap))} pts",
+        ])
+    else:
+        lines.append("👑 <b>Status:</b> Already at the top of this category.")
+
+    lines.extend([
+        "",
+        f"🔥 <b>Current form:</b> Bat {h(format_rating(bat_form))} | Bowl {h(format_rating(bowl_form))}",
+        "",
+        "✅ <b>Best ways to climb</b>",
+    ])
+    lines.extend(f"• {h(item)}" for item in plan)
+    if category != "All-Rounder":
+        lines.append("")
+        lines.append("Tip: use /climb name batting, /climb name bowling, or /climb name ar.")
+    return "\n".join(lines)
+
+
 def _parse_two_players(args: List[str]) -> Optional[Tuple[str, str, str]]:
     raw = " ".join(args).strip()
     if not raw:
@@ -1862,6 +2086,7 @@ COMMANDS = {
     "form": command_form,
     "badges": command_badges,
     "dna": command_dna,
+    "climb": command_climb,
     "hot": command_hot,
     "cold": command_cold,
     "expose": command_expose,

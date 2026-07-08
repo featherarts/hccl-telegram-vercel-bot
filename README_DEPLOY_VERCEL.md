@@ -1,14 +1,17 @@
-# HCCL Telegram Bot v2.4 — Player DNA Card
+# HCCL Telegram Bot v2.5 — How to Climb
 
-This version keeps all v2.3 Player Badges features and adds a fast Player DNA Card command.
+This version keeps v2.4 Player DNA and adds a fast How to Climb command.
 
 New command:
 
 ```text
-/dna Hasitha
+/climb Hasitha
+/climb Hasitha batting
+/climb Hasitha bowling
+/climb Hasitha ar
 ```
 
-The DNA card uses the already-loaded player profile data from Supabase, so it does not add extra heavy queries. It shows player type, batting DNA, bowling DNA, form DNA, main strength, and the next improvement area.
+The command shows the player's current rank, next target above him, approximate rating gap, current form, badges, and the best ways to climb. It uses a short cache so repeated /climb commands respond faster and do not make heavy repeated Supabase calls.
 
 ---
 

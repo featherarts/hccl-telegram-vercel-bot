@@ -1,3 +1,9 @@
+HCCL Telegram Bot v2.5 - How to Climb
+
+New command: /climb PlayerName, /climb PlayerName batting, /climb PlayerName bowling, /climb PlayerName ar
+
+Replace repo files, redeploy Vercel, no webhook reset unless URL changed.
+
 HCCL Telegram Bot v2.4 - Player DNA Card
 
 Try these commands:
