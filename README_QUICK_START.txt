@@ -1,7 +1,16 @@
+HCCL Telegram Bot v2.4 - Player DNA Card
+
+Try these commands:
+/dna Hasitha
+/badges Hasitha
+/hot
+/cold
+
 HCCL Telegram Bot v2.3 - Player Badges
 
 New command:
 /badges Hasitha
+/dna Hasitha
 
 Badges also appear in /player, /card, /rank, and /form.
 

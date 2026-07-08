@@ -63,6 +63,7 @@ HELP_TEXT = """
 📊 /rank Hasitha — quick ranks
 🔥 /form Hasitha — recent form
 🎖️ /badges Hasitha — player badges/titles
+🧬 /dna Hasitha — player DNA card
 🔥 /hot — hottest recent-form players
 🥶 /cold — coldest recent-form players
 🚨 /expose — worst recent form expose list
@@ -102,6 +103,7 @@ COMMAND_DESCRIPTIONS = {
     "rank": "Quick player ranks, e.g. /rank Hasitha",
     "form": "Player recent form, e.g. /form Hasitha",
     "badges": "Player badges and titles, e.g. /badges Hasitha",
+    "dna": "Player DNA card, e.g. /dna Hasitha",
     "hot": "Hottest recent-form players",
     "cold": "Coldest recent-form players",
     "expose": "Top 3 worst recent-form performers",
@@ -1011,6 +1013,156 @@ def command_badges(args: List[str]) -> str:
     ])
     return "\n".join(lines)
 
+
+# ---------------------------------------------------------------------------
+# Player DNA Card — fast profile-style analysis using the same loaded player data.
+# ---------------------------------------------------------------------------
+
+def _dna_rank(row: Optional[Dict[str, Any]]) -> int:
+    return _badge_rank_int((row or {}).get("rank"))
+
+
+def _dna_type(bat_rating: float, bowl_rating: float, ar_rating: float, bat_rank: int, bowl_rank: int, ar_rank: int, runs: float, wickets: float) -> str:
+    if ar_rating >= 650 or ar_rank <= 5:
+        return "⚔️ Elite All-Rounder"
+    if ar_rating >= 520 or (runs >= 100 and wickets >= 10 and abs(bat_rating - bowl_rating) <= 90):
+        return "🛡️ Balanced All-Rounder"
+    if bat_rating >= bowl_rating + 90 or (bat_rank <= bowl_rank and bat_rating >= 600):
+        return "🏏 Batting Specialist"
+    if bowl_rating >= bat_rating + 90 or (bowl_rank <= bat_rank and bowl_rating >= 600):
+        return "🎯 Bowling Specialist"
+    if runs >= 100 or wickets >= 10:
+        return "🧱 Squad Contributor"
+    return "🌱 Developing Player"
+
+
+def _batting_dna(bat_rating: float, bat_form: float, runs: float, bat_rank: int) -> str:
+    if bat_rank <= 3 or bat_rating >= 750:
+        return "👑 Elite run creator"
+    if runs >= 1000:
+        return "💣 Proven run machine"
+    if bat_form >= 35:
+        return "🔥 In-form batting threat"
+    if bat_rating >= 600:
+        return "🏏 Reliable scoring option"
+    if runs >= 100:
+        return "🧱 Support batter"
+    return "🌱 Still building batting impact"
+
+
+def _bowling_dna(bowl_rating: float, bowl_form: float, wickets: float, bowl_rank: int) -> str:
+    if bowl_rank <= 3 or bowl_rating >= 750:
+        return "🎯 Strike bowling weapon"
+    if wickets >= 75:
+        return "🧨 Proven wicket hunter"
+    if bowl_form >= 50:
+        return "🔥 Hot wicket-taking form"
+    if bowl_rating >= 600:
+        return "🛡️ Strong bowling asset"
+    if wickets >= 10:
+        return "🎯 Useful bowling option"
+    return "🌱 Limited bowling impact"
+
+
+def _dna_form(overall_form: float) -> str:
+    if overall_form >= 75:
+        return "🔥 Red-hot form"
+    if overall_form >= 45:
+        return "🟢 Strong current form"
+    if overall_form >= 20:
+        return "🟡 Steady form"
+    if overall_form >= 0:
+        return "🔵 Quiet recent form"
+    return "🥶 Cold spell"
+
+
+def _dna_strength(bat_rating: float, bowl_rating: float, ar_rating: float, bat_form: float, bowl_form: float, runs: float, wickets: float) -> str:
+    options = [
+        (bat_rating, "🏏 Batting rating"),
+        (bowl_rating, "🎯 Bowling rating"),
+        (ar_rating, "⚔️ All-round value"),
+        (bat_form * 8, "🔥 Batting form"),
+        (bowl_form * 6, "🔥 Bowling form"),
+        (min(runs / 2, 700), "💣 Career runs"),
+        (min(wickets * 8, 700), "🧨 Career wickets"),
+    ]
+    return max(options, key=lambda x: x[0])[1]
+
+
+def _dna_improve(bat_rating: float, bowl_rating: float, bat_form: float, bowl_form: float, runs: float, wickets: float) -> str:
+    if runs >= 100 and bat_form <= 10:
+        return "🏏 Batting recent form"
+    if wickets >= 10 and bowl_form <= 10:
+        return "🎯 Bowling recent form"
+    if bat_rating < bowl_rating - 100:
+        return "🏏 Batting contribution"
+    if bowl_rating < bat_rating - 100:
+        return "🎯 Bowling contribution"
+    if runs < 100:
+        return "🏏 More career runs"
+    if wickets < 10:
+        return "🎯 More wickets"
+    return "📈 Keep consistency high"
+
+
+def command_dna(args: List[str]) -> str:
+    query = " ".join(args).strip()
+    if not query:
+        return "Use like this: /dna Hasitha"
+    snapshot, player_name, rows, rows_by_category, detail_row, details, team, suggestions = _profile_lookup(query)
+    if not player_name:
+        return _not_found_msg("Player", query, suggestions)
+
+    bat_row = rows_by_category.get("Batting")
+    bowl_row = rows_by_category.get("Bowling")
+    ar_row = rows_by_category.get("All-Rounder")
+
+    bat_rating = _badge_rating(bat_row, details, "batting_rating", "Batting Rating")
+    bowl_rating = _badge_rating(bowl_row, details, "bowling_rating", "Bowling Rating")
+    ar_rating = _badge_rating(ar_row, details, "all_rounder_rating", "All-Rounder Rating", "All Rounder Rating")
+    bat_rank = _dna_rank(bat_row)
+    bowl_rank = _dna_rank(bowl_row)
+    ar_rank = _dna_rank(ar_row)
+
+    runs = as_number(detail_value(details, "runs", "RUNS", "career_runs", "Career Runs"), default=0)
+    wickets = as_number(detail_value(details, "wickets", "WICKETS", "career_wickets", "Career Wickets"), default=0)
+    innings = as_number(detail_value(details, "innings", "INNINGS", "career_innings", "Career Innings"), default=0)
+    bat_form = as_number(detail_value(details, "batting_recent_form", "Batting Recent Form", "bat_recent_form"), default=0)
+    bowl_form = as_number(detail_value(details, "bowling_recent_form", "Bowling Recent Form", "bowl_recent_form"), default=0)
+    overall_form = max(-25.0, min(100.0, bat_form + bowl_form))
+    badge_list = player_badges(rows_by_category, details, max_badges=4)
+
+    player_type = _dna_type(bat_rating, bowl_rating, ar_rating, bat_rank, bowl_rank, ar_rank, runs, wickets)
+    batting = _batting_dna(bat_rating, bat_form, runs, bat_rank)
+    bowling = _bowling_dna(bowl_rating, bowl_form, wickets, bowl_rank)
+    form = _dna_form(overall_form)
+    strength = _dna_strength(bat_rating, bowl_rating, ar_rating, bat_form, bowl_form, runs, wickets)
+    improve = _dna_improve(bat_rating, bowl_rating, bat_form, bowl_form, runs, wickets)
+
+    lines = [
+        "🧬 <b>HCCL PLAYER DNA</b>",
+        "",
+        f"{bold(player_name)} {italic(f'({team})')}",
+        f"🗓 {h(snapshot.week_label)}",
+        "",
+        f"🧬 <b>Type:</b> {h(player_type)}",
+        f"🎖️ <b>Badges:</b> {h(' | '.join(badge_list))}",
+        "",
+        "📊 <b>DNA Scores</b>",
+        f"🏏 Bat: {h(format_rating(bat_rating))} | 🎯 Bowl: {h(format_rating(bowl_rating))} | 👑 AR: {h(format_rating(ar_rating))}",
+        f"🔥 Form: {h(format_rating(overall_form))} | Bat {h(format_rating(bat_form))} | Bowl {h(format_rating(bowl_form))}",
+        "",
+        "🧠 <b>Profile Read</b>",
+        f"🏏 Batting DNA: {h(batting)}",
+        f"🎯 Bowling DNA: {h(bowling)}",
+        f"🔥 Form DNA: {h(form)}",
+        f"💎 Main strength: {h(strength)}",
+        f"🪜 Improve next: {h(improve)}",
+        "",
+        f"📌 Career: {h(format_rating(innings))} inns • {h(format_rating(runs))} runs • {h(format_rating(wickets))} wkts",
+    ]
+    return "\n".join(lines)
+
 def _parse_two_players(args: List[str]) -> Optional[Tuple[str, str, str]]:
     raw = " ".join(args).strip()
     if not raw:
@@ -1709,6 +1861,7 @@ COMMANDS = {
     "rank": command_rank,
     "form": command_form,
     "badges": command_badges,
+    "dna": command_dna,
     "hot": command_hot,
     "cold": command_cold,
     "expose": command_expose,

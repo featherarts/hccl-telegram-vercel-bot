@@ -1,24 +1,14 @@
-# HCCL Telegram Bot v2.3 — Player Badges / Titles
+# HCCL Telegram Bot v2.4 — Player DNA Card
 
-This version keeps all v2.2 features and adds player badges/titles.
+This version keeps all v2.3 Player Badges features and adds a fast Player DNA Card command.
 
 New command:
 
 ```text
-/badges Hasitha
+/dna Hasitha
 ```
 
-Badges are also shown inside:
-
-```text
-/player Hasitha
-/card Hasitha
-/rank Hasitha
-/form Hasitha
-```
-
-It does **not** run 24/7 with polling. Telegram sends every command to your Vercel endpoint at `/api/telegram`.
-
+The DNA card uses the already-loaded player profile data from Supabase, so it does not add extra heavy queries. It shows player type, batting DNA, bowling DNA, form DNA, main strength, and the next improvement area.
 
 ---
 

@@ -1,7 +1,7 @@
 [project]
 name = "hccl-telegram-vercel-bot"
-version = "2.3.0"
-description = "HCCL Telegram Bot webhook for Vercel with team power, hot/cold form, and player badges"
+version = "2.4.0"
+description = "HCCL Telegram Bot webhook for Vercel with team power, hot/cold form, player badges, and player DNA cards"
 requires-python = ">=3.12"
 dependencies = [
     "supabase>=2.0.0",
