@@ -1,3 +1,27 @@
+# HCCL Telegram Bot v2.3 — Player Badges / Titles
+
+This version keeps all v2.2 features and adds player badges/titles.
+
+New command:
+
+```text
+/badges Hasitha
+```
+
+Badges are also shown inside:
+
+```text
+/player Hasitha
+/card Hasitha
+/rank Hasitha
+/form Hasitha
+```
+
+It does **not** run 24/7 with polling. Telegram sends every command to your Vercel endpoint at `/api/telegram`.
+
+
+---
+
 # HCCL Telegram Bot v1.9 — Interactive Mobile Commands
 
 This version keeps the Vercel webhook setup from v1.8 and adds new clean mobile-first commands:

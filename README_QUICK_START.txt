@@ -1,3 +1,17 @@
+HCCL Telegram Bot v2.3 - Player Badges
+
+New command:
+/badges Hasitha
+
+Badges also appear in /player, /card, /rank, and /form.
+
+Replace your Vercel repo files, redeploy, and test:
+/badges Hasitha
+/player Hasitha
+/rank Hasitha
+
+No webhook reset is needed unless the Vercel URL changed.
+
 HCCL Telegram Bot v1.9 — Interactive Mobile Commands
 
 1. Upload/replace these files in your existing Vercel bot GitHub repo.

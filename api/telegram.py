@@ -62,6 +62,7 @@ HELP_TEXT = """
 🏟 /team DRAGONS — team rankings
 📊 /rank Hasitha — quick ranks
 🔥 /form Hasitha — recent form
+🎖️ /badges Hasitha — player badges/titles
 🔥 /hot — hottest recent-form players
 🥶 /cold — coldest recent-form players
 🚨 /expose — worst recent form expose list
@@ -100,6 +101,7 @@ COMMAND_DESCRIPTIONS = {
     "power": "Team power rankings",
     "rank": "Quick player ranks, e.g. /rank Hasitha",
     "form": "Player recent form, e.g. /form Hasitha",
+    "badges": "Player badges and titles, e.g. /badges Hasitha",
     "hot": "Hottest recent-form players",
     "cold": "Coldest recent-form players",
     "expose": "Top 3 worst recent-form performers",
@@ -465,8 +467,114 @@ def detail_value(details: Dict[str, Any], *keys: str) -> Any:
     return None
 
 
+
 def format_detail(details: Dict[str, Any], *keys: str) -> str:
     return format_rating(detail_value(details, *keys))
+
+
+# ---------------------------------------------------------------------------
+# Player badges / titles — fast, no extra DB calls when used inside profile.
+# ---------------------------------------------------------------------------
+
+BADGE_PRIORITY = [
+    "👑 Elite Batter",
+    "🎯 Strike Bowler",
+    "⚔️ All-Round Warrior",
+    "🔥 In-Form Beast",
+    "💣 Run Machine",
+    "🧨 Wicket Hunter",
+    "🏏 Batting Star",
+    "🛡️ Bowling Asset",
+    "🚀 Fast Climber",
+    "📉 Form Drop",
+    "🥶 Cold Streak",
+]
+
+
+def _badge_rank_int(value: Any, default: int = 9999) -> int:
+    try:
+        if value is None or value == "":
+            return default
+        return int(float(str(value).replace("#", "").strip()))
+    except Exception:
+        return default
+
+
+def _badge_rating(row: Optional[Dict[str, Any]], details: Dict[str, Any], *detail_keys: str) -> float:
+    if row and row.get("rating") not in (None, ""):
+        return as_number(row.get("rating"), default=0)
+    return as_number(detail_value(details, *detail_keys), default=0)
+
+
+def player_badges(rows_by_category: Dict[str, Dict[str, Any]], details: Dict[str, Any], max_badges: int = 4) -> List[str]:
+    bat_row = rows_by_category.get("Batting")
+    bowl_row = rows_by_category.get("Bowling")
+    ar_row = rows_by_category.get("All-Rounder")
+
+    bat_rank = _badge_rank_int((bat_row or {}).get("rank"))
+    bowl_rank = _badge_rank_int((bowl_row or {}).get("rank"))
+    ar_rank = _badge_rank_int((ar_row or {}).get("rank"))
+
+    bat_rating = _badge_rating(bat_row, details, "batting_rating", "Batting Rating")
+    bowl_rating = _badge_rating(bowl_row, details, "bowling_rating", "Bowling Rating")
+    ar_rating = _badge_rating(ar_row, details, "all_rounder_rating", "All-Rounder Rating", "All Rounder Rating")
+
+    runs = as_number(detail_value(details, "runs", "RUNS", "career_runs", "Career Runs"), default=0)
+    wickets = as_number(detail_value(details, "wickets", "WICKETS", "career_wickets", "Career Wickets"), default=0)
+    bat_form = as_number(detail_value(details, "batting_recent_form", "Batting Recent Form", "bat_recent_form"), default=0)
+    bowl_form = as_number(detail_value(details, "bowling_recent_form", "Bowling Recent Form", "bowl_recent_form"), default=0)
+    overall_form = bat_form + bowl_form
+
+    changes = [as_number(row.get("rating_change"), default=0) for row in [bat_row, bowl_row, ar_row] if row]
+    best_change = max(changes) if changes else 0
+    worst_change = min(changes) if changes else 0
+
+    badges: List[str] = []
+    if bat_rank <= 3 or bat_rating >= 750:
+        badges.append("👑 Elite Batter")
+    if bowl_rank <= 3 or bowl_rating >= 750:
+        badges.append("🎯 Strike Bowler")
+    if ar_rank <= 5 or ar_rating >= 650:
+        badges.append("⚔️ All-Round Warrior")
+    if overall_form >= 60:
+        badges.append("🔥 In-Form Beast")
+    if runs >= 1000:
+        badges.append("💣 Run Machine")
+    if wickets >= 75:
+        badges.append("🧨 Wicket Hunter")
+    if bat_rating >= 650 and "👑 Elite Batter" not in badges:
+        badges.append("🏏 Batting Star")
+    if bowl_rating >= 650 and "🎯 Strike Bowler" not in badges:
+        badges.append("🛡️ Bowling Asset")
+    if best_change >= 30:
+        badges.append("🚀 Fast Climber")
+    if worst_change <= -30:
+        badges.append("📉 Form Drop")
+    if (runs >= 100 or wickets >= 10) and overall_form <= 10:
+        badges.append("🥶 Cold Streak")
+
+    ordered = [badge for badge in BADGE_PRIORITY if badge in badges]
+    return ordered[:max_badges] or ["🧱 Squad Contributor"]
+
+
+def badges_text(rows_by_category: Dict[str, Dict[str, Any]], details: Dict[str, Any], max_badges: int = 4) -> str:
+    return " | ".join(player_badges(rows_by_category, details, max_badges=max_badges))
+
+
+def badge_role(badges: List[str]) -> str:
+    text = " ".join(badges)
+    if "All-Round" in text:
+        return "⚔️ All-round core"
+    if "Elite Batter" in text or "Batting Star" in text or "Run Machine" in text:
+        return "🏏 Batting weapon"
+    if "Strike Bowler" in text or "Bowling Asset" in text or "Wicket Hunter" in text:
+        return "🎯 Bowling weapon"
+    if "In-Form" in text:
+        return "🔥 Form player"
+    if "Cold" in text:
+        return "🥶 Needs comeback"
+    return "🧱 Squad contributor"
+
 
 
 def _player_team_id(player_name: str, team: str, player_id: Any) -> List[str]:
@@ -501,7 +609,7 @@ def format_profile_card(query: str, compact: bool = False) -> str:
     player_id = (detail_row or {}).get("player_id") or detail_value(details, "player_id", "ID", "Player ID") or "—"
 
     if compact:
-        lines = [f"⚡ {bold(player_name)} {italic(f'({team})')}", f"🗓 {h(snapshot.week_label)}", ""]
+        lines = [f"⚡ {bold(player_name)} {italic(f'({team})')}", f"🗓 {h(snapshot.week_label)}", f"🎖️ {h(badges_text(rows_by_category, details))}", ""]
         for category in ["Batting", "Bowling", "All-Rounder"]:
             row = rows_by_category.get(category)
             icon = CATEGORY_ICONS.get(category, "•")
@@ -526,6 +634,9 @@ def format_profile_card(query: str, compact: bool = False) -> str:
         "",
         "⚡ <b>Status</b>",
         _profile_badges(rows_by_category, details),
+        "",
+        "🎖️ <b>Badges / Titles</b>",
+        h(badges_text(rows_by_category, details)),
         "",
         "📊 <b>Rankings</b>",
     ]
@@ -806,6 +917,7 @@ def command_rank(args: List[str]) -> str:
         lines.append(_rank_mini_line(category, rows_by_category.get(category)))
     lines.extend([
         "",
+        f"🎖️ Badges: {h(badges_text(rows_by_category, details))}",
         f"🏆 Best: {h(_best_skill(rows_by_category))}",
         f"📈 Move: {h(_movement_summary(rows_by_category))}",
     ])
@@ -853,6 +965,9 @@ def command_form(args: List[str]) -> str:
         "🎯 <b>Bowling Form</b>",
         f"{h(format_rating(bowl_form))} pts • {h(_form_mood(bowl_form))}",
         "",
+        "🎖️ <b>Badges</b>",
+        h(badges_text(rows_by_category, details)),
+        "",
         "📊 <b>Current Ratings</b>",
         f"🏏 Bat: {h(format_rating(bat_rating))}",
         f"🎯 Bowl: {h(format_rating(bowl_rating))}",
@@ -860,6 +975,41 @@ def command_form(args: List[str]) -> str:
     ]
     return "\n".join(lines)
 
+
+
+
+def command_badges(args: List[str]) -> str:
+    query = " ".join(args).strip()
+    if not query:
+        return "Use like this: /badges Hasitha"
+    snapshot, player_name, rows, rows_by_category, detail_row, details, team, suggestions = _profile_lookup(query)
+    if not player_name:
+        return _not_found_msg("Player", query, suggestions)
+
+    badge_list = player_badges(rows_by_category, details, max_badges=6)
+    runs = detail_value(details, "runs", "RUNS", "Career Runs")
+    wickets = detail_value(details, "wickets", "WICKETS", "Career Wickets")
+    bat_form = detail_value(details, "batting_recent_form", "Batting Recent Form")
+    bowl_form = detail_value(details, "bowling_recent_form", "Bowling Recent Form")
+
+    lines = [
+        "🎖️ <b>HCCL PLAYER BADGES</b>",
+        "",
+        f"{bold(player_name)} {italic(f'({team})')}",
+        f"🗓 {h(snapshot.week_label)}",
+        "",
+        "🏷️ <b>Titles</b>",
+    ]
+    for badge in badge_list:
+        lines.append(f"• {h(badge)}")
+    lines.extend([
+        "",
+        f"🧬 <b>Role:</b> {h(badge_role(badge_list))}",
+        f"🏆 <b>Best discipline:</b> {h(_best_skill(rows_by_category))}",
+        f"📌 <b>Career:</b> {h(format_rating(runs))} runs | {h(format_rating(wickets))} wkts",
+        f"🔥 <b>Form:</b> Bat {h(format_rating(bat_form))} | Bowl {h(format_rating(bowl_form))}",
+    ])
+    return "\n".join(lines)
 
 def _parse_two_players(args: List[str]) -> Optional[Tuple[str, str, str]]:
     raw = " ".join(args).strip()
@@ -1558,6 +1708,7 @@ COMMANDS = {
     "power": command_power,
     "rank": command_rank,
     "form": command_form,
+    "badges": command_badges,
     "hot": command_hot,
     "cold": command_cold,
     "expose": command_expose,
